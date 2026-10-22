@@ -3978,7 +3978,7 @@ void main() {
       float disc = smoothstep(0.99955, 0.99985, cosA);
       col += uSunCol * (glow + disc * 5.0);
       // haze band hugging the horizon
-      col = mix(col, vec3(0.80, 0.88, 0.94), smoothstep(0.07, -0.02, dir.y) * 0.40);
+      col = mix(col, vec3(0.80, 0.88, 0.94), (1.0 - smoothstep(-0.02, 0.07, dir.y)) * 0.40);
       // cloud deck, projected on a high plane so it stretches to the horizon
       if (dir.y > 0.015) {
         vec2 uv = dir.xz / (dir.y + 0.10) * 0.30;
@@ -4048,11 +4048,11 @@ void main() {
       // the wash behind the boat tilts the surface, so it catches the sun
       float wd = vWorld.z - (uBoatZ + 3.20);
       float ax = abs(vWorld.x);
-      float turbBand = uWakeOn * smoothstep(0.0, 3.0, wd) * exp(-wd / 34.0)
-                     * exp(-pow(vWorld.x / (2.2 + 0.34 * max(wd, 0.0)), 2.0));
+      float turbBand = uWakeOn * smoothstep(0.0, 3.0, wd) * exp(-wd / 11.0)
+                     * exp(-pow(vWorld.x / (1.5 + 0.10 * max(wd, 0.0)), 2.0));
       // transverse waves rolling off the transom, on top of the churn
-      float trans = sin(wd * 1.05 + 0.02 * wd * wd - uTime * 2.2) * exp(-max(wd, 0.0) / 26.0)
-                  * exp(-pow(vWorld.x / (2.6 + 0.30 * max(wd, 0.0)), 2.0));
+      float trans = sin(wd * 1.05 + 0.02 * wd * wd - uTime * 2.2) * exp(-max(wd, 0.0) / 7.5)
+                  * exp(-pow(vWorld.x / (1.6 + 0.12 * max(wd, 0.0)), 2.0));
       n = normalize(n + vec3(sin(vWorld.x * 3.1 + wd * 1.9 + uTime * 2.1) * 0.10 * turbBand,
                              0.0,
                              sin(wd * 2.4 - uTime * 1.7) * 0.07 * turbBand + trans * 0.09 * uWakeOn));
@@ -4089,22 +4089,23 @@ void main() {
       // ---- wake foam -----------------------------------------------------
       float d = vWorld.z - (uBoatZ + 3.20);
       if (uWakeOn > 0.5 && d > -2.5) {
-        float spread = 1.25 + 0.3536 * d + sin(d * 0.31) * 0.10;
-        float hullFoam = exp(-pow((ax - 1.15) / 0.42, 2.0)) * smoothstep(3.0, -2.0, d);
-        float prop = exp(-d / 5.2) * exp(-pow(ax / 1.85, 2.0));
-        float crestLine = exp(-pow((ax - spread) / (0.38 + 0.010 * d), 2.0));
-        float crestFoam = crestLine * exp(-d / 16.0) * (0.55 + 0.45 * sin(d * 0.9 + ax * 1.7));
-        float wash = smoothstep(spread, 0.0, ax) * exp(-d / 14.0) * 0.06;
+        float spread = 0.90 + 0.085 * d + sin(d * 0.31) * 0.03;
+        float hullFoam = exp(-pow((ax - 1.05) / 0.30, 2.0)) * (1.0 - smoothstep(-2.0, 3.0, d));
+        float prop = exp(-d / 4.6) * exp(-pow(ax / 1.42, 2.0));
+        float crestLine = exp(-pow((ax - spread) / (0.22 + 0.004 * d), 2.0));
+        float crestFoam = crestLine * exp(-d / 4.0) * (1.0 - smoothstep(6.0, 17.0, d))
+                        * (0.70 + 0.30 * sin(d * 0.9 + ax * 1.7));
+        float wash = (1.0 - smoothstep(0.0, spread, ax)) * exp(-d / 10.0) * 0.035;
 
         float n1 = texture2D(uNoise, vWorld.xz * vec2(0.55, 0.18) + vec2(0.0, -uTime * 0.03)).r;
         float n2 = texture2D(uNoise, vWorld.xz * vec2(1.90, 0.62) + 31.0).r;
         float grain = n1 * 0.60 + n2 * 0.40;
 
-        float foam = hullFoam * 0.80 + prop * 0.62 * (0.55 + 1.15 * smoothstep(0.30, 0.80, grain))
-                   + crestFoam * (0.30 + 0.85 * smoothstep(0.40, 0.74, grain)) + wash;
+        float foam = hullFoam * 0.95 + prop * 0.95 * (0.55 + 1.05 * smoothstep(0.30, 0.80, grain))
+                   + crestFoam * (0.55 + 1.05 * smoothstep(0.40, 0.74, grain)) + wash;
         foam *= smoothstep(0.17, 0.54, grain * 0.90 + 0.18);
 
-        float alive = smoothstep(-2.0, 1.0, d) * smoothstep(uBoatDist + 4.0, uBoatDist - 8.0, d);
+        float alive = smoothstep(-2.0, 1.0, d) * (1.0 - smoothstep(uBoatDist - 8.0, uBoatDist + 4.0, d));
         foam = clamp(foam * alive, 0.0, 0.80);
         vec3 foamCol = mix(vec3(0.90, 0.95, 0.97), vec3(1.0), smoothstep(0.5, 0.9, grain));
         col = mix(col, foamCol, foam);
