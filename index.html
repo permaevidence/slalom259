@@ -4090,10 +4090,10 @@ void main() {
       float d = vWorld.z - (uBoatZ + 3.20);
       if (uWakeOn > 0.5 && d > -2.5) {
         float spread = 0.90 + 0.085 * d + sin(d * 0.31) * 0.03;
-        float hullFoam = exp(-pow((ax - 1.05) / 0.30, 2.0)) * (1.0 - smoothstep(-2.0, 3.0, d));
-        float prop = exp(-d / 4.6) * exp(-pow(ax / 1.42, 2.0));
+        float hullFoam = exp(-pow((ax - 1.10) / 0.42, 2.0)) * (1.0 - smoothstep(-2.0, 4.0, d));
+        float prop = exp(-d / 5.5) * exp(-pow(ax / 1.50, 2.0));
         float crestLine = exp(-pow((ax - spread) / (0.22 + 0.004 * d), 2.0));
-        float crestFoam = crestLine * exp(-d / 4.0) * (1.0 - smoothstep(6.0, 17.0, d))
+        float crestFoam = crestLine * exp(-d / 6.0) * (1.0 - smoothstep(9.0, 22.0, d))
                         * (0.70 + 0.30 * sin(d * 0.9 + ax * 1.7));
         float wash = (1.0 - smoothstep(0.0, spread, ax)) * exp(-d / 10.0) * 0.035;
 
@@ -4101,13 +4101,14 @@ void main() {
         float n2 = texture2D(uNoise, vWorld.xz * vec2(1.90, 0.62) + 31.0).r;
         float grain = n1 * 0.60 + n2 * 0.40;
 
-        float foam = hullFoam * 0.95 + prop * 0.95 * (0.55 + 1.05 * smoothstep(0.30, 0.80, grain))
+        float core = (1.0 - smoothstep(1.0, 9.5, d)) * smoothstep(-1.5, 0.8, d) * exp(-pow(ax / 1.85, 2.0));
+        float foam = core * 1.05 + hullFoam * 1.0 + prop * 1.0 * (0.72 + 0.55 * smoothstep(0.30, 0.80, grain))
                    + crestFoam * (0.55 + 1.05 * smoothstep(0.40, 0.74, grain)) + wash;
-        foam *= smoothstep(0.17, 0.54, grain * 0.90 + 0.18);
+        foam *= 0.55 + 0.65 * smoothstep(0.08, 0.62, grain);
 
         float alive = smoothstep(-2.0, 1.0, d) * (1.0 - smoothstep(uBoatDist - 8.0, uBoatDist + 4.0, d));
-        foam = clamp(foam * alive, 0.0, 0.80);
-        vec3 foamCol = mix(vec3(0.90, 0.95, 0.97), vec3(1.0), smoothstep(0.5, 0.9, grain));
+        foam = clamp(foam * alive, 0.0, 0.97);
+        vec3 foamCol = mix(vec3(0.95, 0.98, 1.0), vec3(1.0), smoothstep(0.35, 0.75, grain));
         col = mix(col, foamCol, foam);
       }
 
