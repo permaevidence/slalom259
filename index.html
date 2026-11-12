@@ -8479,6 +8479,8 @@ var GEAR = (() => {
     Y = new V3_(0, 1, 0),
     UP = 0.3,
     FORE = 0.265,
+    GRIP = 0.092, // each hand's distance from the middle of the bar
+    TILT = 1.05, // a bar held by the left hand alone hangs 60 degrees below level, right end down
     limb = (mesh, a, c) => {
       t1.subVectors(c, a);
       let l = t1.length() || 1e-4;
@@ -8505,6 +8507,21 @@ var GEAR = (() => {
     b.crossVectors(r, upMix).normalize();
     n.crossVectors(b, r).normalize();
     t2.copy(r).negate();
+    // One hand on the bar: when the right (palm-down) hand lets go, the left hand, which holds
+    // palm up, lets the bar roll round the rope until its wrist is neutral, thumb up. The right
+    // end drops and the bar ends about 30 degrees from vertical. It turns about the left hand,
+    // which stays where the arm put it, and levels again as the right hand comes back.
+    // The angle is measured from level, not from the leaning body the bar otherwise follows.
+    let roll = fs > 0 ? ease : 0,
+      tilt = 0;
+    if (roll) {
+      (xb.crossVectors(r, Y).normalize(), zb.crossVectors(xb, r));
+      tilt = (TILT + Math.atan2(b.dot(zb), b.dot(xb))) * roll;
+      let c = Math.cos(tilt),
+        sn = Math.sin(tilt);
+      (t1.copy(b), b.multiplyScalar(c).addScaledVector(n, -sn), n.multiplyScalar(c).addScaledVector(t1, sn));
+      hc.addScaledVector(t1, -GRIP).addScaledVector(b, GRIP);
+    }
     (handle.matrix.makeBasis(b, n, t2).setPosition(hc), (handle.matrixWorldNeedsUpdate = !0));
     apex.copy(hc).addScaledVector(r, handle.userData.apex + 0.04);
     cs.copy(chest);
@@ -8515,12 +8532,12 @@ var GEAR = (() => {
     srT.copy(sr).multiplyScalar(Math.cos(th)).addScaledVector(t1, -fs * Math.sin(th)).normalize();
     (yb.subVectors(cs, pelvis), zb.crossVectors(srT, yb).normalize(), xb.crossVectors(yb, zb).normalize());
     (torso.matrix.makeBasis(xb, yb, zb).setPosition(pelvis), (torso.matrixWorldNeedsUpdate = !0));
-    G.dbg = { sr: srT.toArray(), pelvis: pelvis.toArray(), neckBase: chest.clone().addScaledVector(bodyUp, 0.04).toArray(), neckTop: chest.clone().addScaledVector(bodyUp, 0.14).toArray() };
+    G.dbg = { tilt, free: fs, sr: srT.toArray(), pelvis: pelvis.toArray(), neckBase: chest.clone().addScaledVector(bodyUp, 0.04).toArray(), neckTop: chest.clone().addScaledVector(bodyUp, 0.14).toArray() };
     for (let q of sides) {
       let s = q.s,
         over = s > 0; // right hand palm down, left hand palm up
       (S.copy(cs).addScaledVector(srT, s * 0.195), q.cap.position.copy(S));
-      hp.copy(hc).addScaledVector(b, s * 0.092);
+      hp.copy(hc).addScaledVector(b, s * GRIP);
       let free = fs && s === fs,
         wFree = free ? Math.min(1, ease * 3) : 0;
       if (free) {
@@ -8554,7 +8571,8 @@ var GEAR = (() => {
         t2.set(0, -1, 0).addScaledVector(sr, s * 0.2);
         // a hand on the bar bends its arm in the plane square to the bar, so the forearm
         // meets the grip straight on instead of coming in across it
-        wFree < 1 && t2.addScaledVector(b, -t2.dot(b) * (1 - wFree));
+        // (a rolled bar is held with a neutral wrist, so the elbow just hangs)
+        wFree < 1 && t2.addScaledVector(b, -t2.dot(b) * (1 - wFree) * (1 - roll));
         t2.addScaledVector(t1, -t2.dot(t1)).normalize();
         El.copy(S).addScaledVector(t1, UP * ca).addScaledVector(t2, UP * sa);
       }
