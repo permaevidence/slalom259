@@ -66,6 +66,22 @@
   .settings[open] summary::before { content:"\2212  "; }
   .settings summary:hover { opacity:.85; }
   .settings .opt { margin:8px 0 0; }
+  #start { justify-content:flex-start; overflow-y:auto; }
+  #start .card { margin:auto; }
+  .setup { pointer-events:auto; font-size:12px; font-variant-numeric:tabular-nums; }
+  .setup .srow { display:flex; align-items:center; gap:6px; padding:2px 0; }
+  .setup .sname { flex:1; text-align:left; opacity:.75; white-space:nowrap; }
+  .setup .sval { width:68px; text-align:center; }
+  .setup .sval.mod { color:var(--warn); font-weight:600; }
+  .setup .sbtn { pointer-events:auto; width:26px; height:24px; border-radius:7px; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.07); color:var(--ink); font-size:14px; line-height:1; padding:0; }
+  .setup .sbtn:active { background:rgba(65,209,255,.3); }
+  .setup .sinfo { margin-top:6px; font-size:10.5px; line-height:1.5; opacity:.7; text-align:left; }
+  .setup .sreset { pointer-events:auto; margin-top:6px; padding:4px 10px; border-radius:8px; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.07); color:var(--ink); font-size:11px; }
+  #setupChips { margin-top:8px; justify-content:flex-start; }
+  #skiModeChips { justify-content:flex-start; }
+  #setupPanel { position:fixed; right:12px; top:50%; transform:translateY(-50%); width:244px; padding:9px 11px; background:rgba(4,20,30,.62); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid rgba(120,210,255,.22); border-radius:12px; font-size:11px; }
+  #setupPanel.hidden, #start:not(.hidden) ~ #setupPanel { display:none; }
+  .setup .stitle { font-size:10px; letter-spacing:1.4px; text-transform:uppercase; opacity:.6; margin-bottom:4px; }
   .note { margin-top:16px; font-size:10.5px; line-height:1.6; opacity:.45; }
 
   .result { font-size:52px; font-weight:800; letter-spacing:-2px; margin:0; }
@@ -114,19 +130,29 @@
       <div class="chips" id="speedChips"></div>
     </div>
     <div class="opt">
-      <div class="label">Tour top speed</div>
+      <div class="label">Set top speed</div>
       <div class="chips" id="divChips"></div>
     </div>
     <div class="opt">
       <div class="label">Mode</div>
       <div class="chips" id="modeChips"></div>
     </div>
-    <button class="go" id="go">Start the tour</button>
+    <button class="go" id="go">Start the set</button>
     <details class="settings" id="settings">
       <summary>Settings</summary>
       <div class="opt">
         <div class="label">Camera (testing: Chase also turns on the V key)</div>
         <div class="chips" id="camChips"></div>
+      </div>
+      <div class="opt">
+        <div class="label">Skiing model (testing)</div>
+        <div class="chips" id="skiModeChips"></div>
+        <div class="setup"><div class="sinfo" id="skiModeInfo"></div></div>
+      </div>
+      <div class="opt">
+        <div class="label">Ski setup and skier (testing)</div>
+        <div class="setup" id="setupMenu"></div>
+        <div class="chips" id="setupChips"></div>
       </div>
     </details>
     <p class="note">Physics: 75 kg skier, 1.5 t boat with real thrust and surge, inextensible rope that can go slack, 5 g lateral grip limit.</p>
@@ -3980,7 +4006,14 @@ var ze = { length: 259, spacing: 41, firstBuoy: 27, buoyOffset: 11.5, buoyRadius
     sidecut: 4.8,
     carve: 0.6,
     maxEdge: 1.2,
-    edgeRate: 6,
+    // Two skiing models share this file. "Normal" is the tuned one. "Experimental" (xe.exp)
+    // is the attempt to match film of a top skier: full pull with no speed ceiling, an edge
+    // change that takes a fraction of a second, a steadily building inside edge on the way
+    // out, braking once the rope stops holding the ski up, and a lay-in at the buoy. Every
+    // experimental line of physics is behind xe.exp; the three settings that differ between
+    // the two (edgeRate, leanRateMax, overT) are set by skiMode() below.
+    exp: !1,
+    edgeRate: 6, // rad/s the ski rolls from edge to edge
     cmdRate: 4.5,
     cmdRelax: 1.9,
     grip: 5.6,
@@ -3995,6 +4028,17 @@ var ze = { length: 259, spacing: 41, firstBuoy: 27, buoyOffset: 11.5, buoyRadius
     indBase: 0.2, // fraction of it that remains while the rope carries the load
     indMax: 22, // m/s^2 ceiling on it
     suppK: 0.5, // rope tension, as a fraction of the ski's load, that counts as full support
+    suppLean: 0.5, // rad of lean against the rope at which that support is complete
+    // a ski riding flat with nothing holding it up beds into the water and brakes: this much
+    // extra wetted drag, building over settleTau seconds (it runs free at first)
+    sinkDrag: 3,
+    settleTau: 0.5,
+    // Experimental: a ski running flat and unloaded (gliding out wide before the gate, or
+    // rolling from one edge to the other) planes on its whole base. It does not bed in the
+    // way an edged, loaded ski does when the rope lets go of it, and it runs freer than a
+    // ski on edge, so it keeps its speed.
+    flatPlane: 0.85, // share of the unsupported sinking a flat ski is spared
+    flatGlide: 0.3, // share of the hull drag it is spared
     sinkTau: 0.12, // s for the ski to settle into / lift out of the water
     aoaK: 1.15, // ski trim angle (rad) = aoaK * load / v^2
     aoaMax: 0.3,
@@ -4023,11 +4067,37 @@ var ze = { length: 259, spacing: 41, firstBuoy: 27, buoyOffset: 11.5, buoyRadius
     leanCap: 1.3, // rad: caps the load a fully committed lean can carry (about 3.6 g)
     leanFree: 0.22, // rad of lean's worth of force available while standing upright
     leanRateMax: 2.3, // rad/s the body can cross over / fall inside
+    // The edge change itself is quick: in the top-down film of a 10.75 m pass the skier goes
+    // from 40 degrees against the rope to leaning the other way in about a fifth of a second.
+    // The body comes up with the ski as the edge is let go (the rope stands it up).
+    leanRise: 12, // rad/s it comes back toward upright
+    leanUpK: 8,
+    // Experimental: the body goes with the ski. It can lean only this much further than the
+    // ski is edged, so an edge that is let go gradually stands the skier up gradually.
+    leanOver: 0.15,
+    // On the way out to the buoy the lean to the inside is the arm's doing: with both hands on
+    // the handle the body can only fall in this far (rad); the rest comes as the outside hand
+    // lets go and that arm lets the handle out, which starts as soon as the ski is on its
+    // new edge and takes about armTau seconds (longer to be right out).
+    leanTwo: 0.3,
+    armTau: 0.4,
+    armHold: 0.1, // s on the new edge with both hands still on, before the hand starts to leave
     castIn: 0.22, // s to commit to the one-handed reach
     castOut: 0.38, // s to bring the handle back to the hip after the apex
     reachOutRate: 2,
     reachInRate: 1.2,
     maxLean: 1.25,
+    // Once the edge is changed the skier lets the body fall to the inside, hanging off the
+    // handle arm, well before the ski has any load on its new edge; at the buoy on a short
+    // rope it is laid nearly flat, which puts the ski further out. That lean is held by the
+    // arm and the rope, not by the ski, so it adds reach without adding turning force.
+    layBase: 0.2, // rad of it on the long lines
+    layShort: 0.8, // and this much more by the shortest
+    layFrom: 16, // m of rope at which the extra starts
+    layFull: 10.75, // and where it is all there
+    layTau: 0.16, // s to fall in
+    layOut: 0.8, // s for it to come off again through the finish of the turn
+    layMax: 1.5, // rad: body lean and lay-in together never pass this
     hipHeight: 0.74,
     leanK: 95,
     leanC: 17,
@@ -4046,10 +4116,89 @@ var ze = { length: 259, spacing: 41, firstBuoy: 27, buoyOffset: 11.5, buoyRadius
     towHeight: 2.4,
     towBack: 1.2,
   },
-  Rs = [18.25, 16, 14.25, 13, 12, 11.25, 10.75, 10.25, 9.75],
-  vu = [34, 37, 40, 43, 46, 49, 52, 55, 58];
+  // a short-line game: the long ropes (18.25, 16) and the slower speeds (34 to 52) are left
+  // out of the menus for now. The physics still takes any rope or speed.
+  Rs = [14.25, 13, 12, 11.25, 10.75, 10.25, 9.75],
+  vu = [55, 58];
 function Pu(i) {
   return ((i = (i + Math.PI) % (2 * Math.PI)), i < 0 && (i += 2 * Math.PI), i - Math.PI);
+}
+// ---- ski setup ----------------------------------------------------------------------------
+// Everything in xe was tuned on one reference ski at its stock settings. A setup (inches and
+// degrees, the way skiers measure it) does not touch those numbers directly: it changes four
+// physical ratios, each exactly 1 at stock, and the ride follows from them.
+//   hold   side grip of the tail: fin area, so depth above all, then length; less of it with
+//          the bindings forward, which lighten the tail
+//   lever  how far behind the feet that grip acts: fin back, or bindings forward, lengthens it
+//   tip    how much of the forebody is pressed into the water: bindings forward above all;
+//          anything that drags below the tail (wing angle, a bigger fin) levers the tip down too
+//   area   planing surface: ski size
+// The tail (hold x lever) resists the ski turning; the tip makes it turn. Their ratio is the
+// balance of the ski: tip-heavy turns in fast and slides its tail, tail-heavy holds and runs wide.
+// Real changes are thousandths of an inch, far too small for their geometry alone to matter in
+// a model this coarse, so each is weighted per "click" (SKI.gain) by how strongly skiers
+// report feeling it. Those weights are the calibration.
+var SKI = {
+  stock: { len: 67, depth: 2.5, length: 6.85, dft: 0.77, wing: 8, bind: 29.5 },
+  // size of one click of each setting
+  click: { len: 1, depth: 0.01, length: 0.01, dft: 0.01, wing: 1, bind: 0.125 },
+  gain: {
+    // (bindings forward take weight off the tail, so it rides shallower and grips less)
+    hold: { depth: 0.045, length: 0.012, len: 0.004, bind: -0.02 },
+    lever: { dft: -0.02, length: -0.005, bind: 0.008 },
+    tip: { bind: 0.06, length: 0.025, depth: 0.01, dft: -0.008, wing: 0.025 },
+    area: { len: 0.03 },
+    wingArea: 0.003, // m^2, both sides of the wing
+    wingDrag: 2.5, // weight on the wing's drag
+  },
+  set: null,
+};
+function skiRide(set) {
+  let st = SKI.stock,
+    q = Object.assign({}, st, set || {}),
+    g = SKI.gain,
+    d = {},
+    sum = (w) => {
+      let v = 0;
+      for (let k in w) v += w[k] * d[k];
+      return v;
+    };
+  for (let k in st) d[k] = (q[k] - st[k]) / SKI.click[k];
+  q.wing > 0 || (d.wing = -st.wing); // no wing at all
+  let lnHold = sum(g.hold),
+    lnLever = sum(g.lever),
+    lnT = sum(g.tip),
+    lnA = sum(g.area),
+    lenK = q.len / st.len;
+  SKI.set = q;
+  return (xe.ride = {
+    hold: Math.exp(lnHold),
+    lever: Math.exp(lnLever),
+    tip: Math.exp(lnT),
+    area: Math.exp(lnA),
+    lnRM: lnHold + lnLever,
+    lnT,
+    capK: Math.exp(0.7 * (lnHold + lnLever)), // side load the tail carries before it lets go
+    roll: Math.exp(-0.25 * lnHold) / lenK, // a deep fin and a long ski are slower onto edge
+    yawLen: Math.pow(lenK, 1.2), // a longer ski draws a longer arc
+    lagLen: Math.pow(lenK, 1.5), // and takes longer to come round
+    wing: q.wing > 0 ? (q.wing * Math.PI) / 180 : -1,
+    wing0: (st.wing * Math.PI) / 180,
+  });
+}
+// drag area of the wing: a small plate at (wing angle - ski trim) to the water going past
+function skiWingCdA(beta, trim) {
+  if (beta < 0) return 0;
+  let sn = Math.sin(beta - trim);
+  return SKI.gain.wingArea * (0.02 + 6.2832 * sn * sn);
+}
+skiRide();
+// Normal or experimental skiing. A pass in progress keeps the model it started with for the
+// three settings a skier copies at the start; everything else switches at once, so change it
+// between passes.
+function skiMode(exp) {
+  ((xe.exp = !!exp), (xe.edgeRate = exp ? 8 : 6), (xe.leanRateMax = exp ? 3.2 : 2.3), (xe.overT = exp ? 2 : 1.6));
+  return xe.exp;
 }
 function bP(i = -130, A = 1) {
   let e = [];
@@ -4147,6 +4296,14 @@ var ho = class {
         (this.sink = 0),
         (this.loose = 0),
         (this.aoa = 0.04),
+        (this.settle = 0),
+        (this.lay = 0),
+        (this.pre = 0),
+        (this.laySg = 0),
+        (this.smear = 0),
+        (this.smear0 = 0),
+        (this.over = 1),
+        (this.scrubA = 0),
         (this.wash = !1),
         (this.state = "pull"));
     }
@@ -4210,8 +4367,16 @@ var ho = class {
         M;
       if (a) ((m = a.ax), (M = a.az));
       else {
-        let k = e.pump * s * r,
-          L = e.dragCdA * (1 + e.dragEdge * s * s) * (1 - e.liftDragDrop * r),
+        // setup: more forebody in the water is more wetted surface, and so is a bigger ski.
+        // That is what a ski pays while the rope carries it, so a smaller ski pulls up to
+        // speed faster
+        let ride = e.ride,
+          tipW = 0.3 + 0.7 * this.sink,
+          tipX = 1 + tipW * (ride.tip - 1),
+          k = e.pump * s * r,
+          // (1 = dead flat with no side load, 0 = on a real edge or turning)
+          flat = e.exp ? Math.max(0, 1 - Math.max(s / 0.3, Math.abs(n) / 5)) : 0,
+          L = e.dragCdA * (1 + e.dragEdge * s * s) * (1 - e.liftDragDrop * r) * ride.area * (1 + 0.6 * (tipX - 1)) * (1 - e.flatGlide * flat),
           x = Math.max(0, l / this.boat.speed - this.overT),
           Y = 1 + this.overGain * x * x,
           U = 0.5 * 1e3 * L * l * l * Y * (1 + 1.6 * this.scrub);
@@ -4224,12 +4389,38 @@ var ho = class {
         // (scaled with the boat's set speed, so a slow pass sinks in proportion, not three times as hard)
         let vv = Math.max(l, e.planing) * (e.indRef / Math.max(6, this.boat.target)),
           load = Math.hypot(e.g, n),
-          supp = Math.min(1, this.tension / (e.suppK * e.mass * load));
-        this.sink += (1 - supp - this.sink) * (1 - Math.exp(-A / e.sinkTau));
-        let indF = e.indBase + (1 - e.indBase) * this.sink;
+          // experimental: the rope only holds the ski up while the skier is leaning against it
+          // (the body tipped away from the pylon): swinging out after the edge change the line
+          // can be tight and the ski still has to carry everything itself
+          rx = t.x - this.x,
+          rz = t.z - this.z,
+          rl = Math.hypot(rx, rz) || 1,
+          // (standing tall with the rope pulling from ahead counts too: that is every glide)
+          latR = (w * rx + d * rz) / rl,
+          lnS = latR * Math.sin(this.lean),
+          // (a glide: at speed, running out from the wakes, the ski is on its own)
+          ahead = Math.max(0, (h * rx + f * rz) / rl) * Math.max(0, 1 - Math.max(0, lnS) / 0.3) * Math.max(0, Math.min(1, (1.25 - l / Math.max(6, this.boat.target)) / 0.15)),
+          against = e.exp ? Math.max(0, Math.min(1, Math.max(-lnS / Math.sin(e.suppLean), ahead))) : 1,
+          supp = Math.min(1, (this.tension * against) / (e.suppK * e.mass * load));
+        this.sink += ((1 - supp) * (1 - e.flatPlane * flat) - this.sink) * (1 - Math.exp(-A / e.sinkTau));
+        // Once the rope lets go the ski has to carry the skier on its own surface: a bigger
+        // one (or more of it in the water) does so at a flatter trim and keeps its speed, a
+        // smaller one sinks further and loses more
+        let indF = (e.indBase + ((1 - e.indBase) * this.sink) / (ride.area * ride.area)) / (1 + 0.3 * (tipX - 1));
         this.aoa = Math.min(e.aoaMax, (e.aoaK * load * (0.35 + 0.65 * this.sink)) / (vv * vv));
         this.dragInd = e.mass * Math.min(e.indMax, (e.indK * indF * load * load) / (vv * vv));
         U += this.dragInd;
+        // (the bedding-in is a high-speed effect: below boat speed it fades out and the
+        // sinking drag above, which grows as the ski slows, takes over)
+        if (e.exp) {
+          this.settle += (this.sink - this.settle) * (1 - Math.exp(-A / (this.sink > this.settle ? e.settleTau : 0.1)));
+          U += 0.5 * 1e3 * L * l * l * e.sinkDrag * this.settle * Math.max(0, Math.min(1, (l / Math.max(6, this.boat.target) - 0.6) / 0.4));
+        }
+        // the wing (as a change from the stock one, which the baseline drag already includes),
+        // and the speed a sliding tail scrubs off
+        let trim = 0.045 + this.aoa;
+        U += 0.5 * 1e3 * l * l * SKI.gain.wingDrag * (skiWingCdA(ride.wing, trim) - skiWingCdA(ride.wing0, trim)) + e.mass * this.scrubA;
+        U = Math.max(0, U);
         this.drag = U;
         let W = U / e.mass;
         ((m = w * n + h * (k - W)), (M = d * n + f * (k - W)));
@@ -4328,8 +4519,14 @@ var ho = class {
         n !== 0 && (this._lastCmdSign = n),
         (this.oneHandT = Math.max(0, this.oneHandT - A)),
         (this.oneHand = this.oneHandT > 0));
+      // setup: the balance of the ski. The tip only counts while it is in the water, which is
+      // when the rope is not holding the ski up (sink)
+      let ride = t.ride,
+        tipW = 0.3 + 0.7 * this.sink,
+        over = Math.exp(tipW * ride.lnT - ride.lnRM);
+      this.over = over;
       let s = this.edgeCmd * t.maxEdge,
-        r = this.edgeRate * A;
+        r = this.edgeRate * ride.roll * A;
       this.edge += Math.max(-r, Math.min(r, s - this.edge));
       let o = Math.hypot(this.vx, this.vz),
         a = Math.sin(Math.abs(this.edge)),
@@ -4338,27 +4535,67 @@ var ho = class {
         v = t.flatEdge,
         u = t.maxEdge / Math.max(0.2, t.maxEdge - v),
         l = Math.sign(this.edge) * Math.max(0, Math.abs(this.edge) - v) * u,
-        h = t.loadTau > 0 ? Math.min(1, A / t.loadTau) : 1;
-      this.edgeCarve += (l - this.edgeCarve) * h;
-      let f = (P * Math.sin(this.edgeCarve) * t.carve) / t.sidecut,
-        w = this.grip * t.g * (0.35 + 0.65 * c) * (0.35 + 0.65 * a),
+        // a tail-heavy ski is slower to come round, a tip-heavy one quicker
+        h = t.loadTau > 0 ? Math.min(1, A / (t.loadTau * Math.pow(over, -0.8) * ride.lagLen)) : 1;
+      // (experimental: load comes onto an edge gradually, but it goes the moment the ski rolls
+      // off it)
+      if (!t.exp) this.edgeCarve += (l - this.edgeCarve) * h;
+      else {
+        let off = Math.min(1, A / 0.025);
+        if (l * this.edgeCarve < 0) ((this.edgeCarve -= this.edgeCarve * off), Math.abs(this.edgeCarve) < 0.01 && (this.edgeCarve = 0));
+        else this.edgeCarve += (l - this.edgeCarve) * (Math.abs(l) < Math.abs(this.edgeCarve) ? off : h);
+      }
+      // and it draws a tighter or a longer arc for the same edge
+      let f = (P * Math.sin(this.edgeCarve) * t.carve * Math.pow(over, 0.6)) / (t.sidecut * ride.yawLen),
+        w0 = this.grip * t.g * (0.35 + 0.65 * c) * (0.35 + 0.65 * a),
+        w = w0 * ride.capK,
         d = Math.max(-w, Math.min(w, f));
       // what the edge asks for, then what the body's lean can actually back up
       let want = d,
         sgn = Math.sign(d),
         avail = t.g * Math.tan(Math.max(0, Math.min(t.leanCap, this.lean * sgn + t.leanFree)));
       (Math.abs(d) > avail && (d = sgn * avail), (this.want = want));
+      // hold: a ski gives up a little of a hard pull as the load nears what its tail can carry
+      // (measured against the stock tail, so stock gives exactly the baseline)
+      {
+        let ad = Math.abs(d),
+          sm = (b) => 1 / Math.sqrt(Math.sqrt(1 + Math.pow(ad / Math.max(b, 1e-6), 4)));
+        ad > 0 && (d *= sm(w) / sm(w0));
+      }
+      // smear: on edge with its tip in, the tail runs a little wide of the track. A tip-heavy
+      // ski slides further, which scrubs speed; far enough and the tail is gone.
+      {
+        let s0 = 0.14 * a * tipW,
+          kS = 1 - Math.exp(-A / 0.1);
+        this.smear0 += (s0 - this.smear0) * kS;
+        this.smear += (Math.min(0.7, s0 * Math.pow(over, 2.2)) - this.smear) * kS;
+        this.scrubA = 2.5 * Math.abs(d) * (Math.tan(this.smear) - Math.tan(this.smear0));
+      }
       // reaching phase: the turn is committed but the skier is still travelling the other way
       // (want is measured to the right of travel, so on a return pass its world sign flips)
-      let castOn = want * this.dir * this.vx < 0 && Math.abs(this.edgeCmd) > 0.15 && Math.abs(this.vx) > 0.8;
+      let preTurn = want * this.dir * this.vx < 0 && Math.abs(this.vx) > 0.8,
+        castOn = preTurn && Math.abs(this.edgeCmd) > 0.15;
       this.castDir = Math.sign(this.vx);
-      this.cast += ((castOn ? 1 : 0) - this.cast) * (1 - Math.exp(-A / (castOn ? t.castIn : t.castOut)));
+      if (!t.exp) this.cast += ((castOn ? 1 : 0) - this.cast) * (1 - Math.exp(-A / (castOn ? t.castIn : t.castOut)));
+      else {
+        // experimental: the arm starts out as soon as the ski is on its new edge and goes
+        // steadily. Lean, lay-in and reach all follow the arm (below), never lead it.
+        // (a reach starts at speed, running out from the wakes: not turning in for the gate)
+        // (the new edge counts from the moment the ski is rolled onto it, before it bites)
+        let go = this.edgeCmd * this.dir * this.vx < 0 && Math.abs(this.vx) > 0.8 && Math.abs(this.edgeCmd) > 0.02 && (this.cast > 0.05 || o > 1.2 * Math.max(6, this.boat.target));
+        this.preTurn = go;
+        // (the skier hangs on a moment longer while the boat is still slinging them outward)
+        this.holdT = go ? (this.holdT || 0) + A : 0;
+        let out = go && (this.holdT > t.armHold || this.cast > 0.05);
+        this.cast += ((out ? 1 : 0) - this.cast) * (1 - Math.exp(-A / (out ? t.armTau : t.castOut)));
+        this.armS = this.cast * this.cast * (3 - 2 * this.cast);
+      }
       this.oneHand = this.oneHand || this.cast > 0.3;
       ((this.accelLat = d),
         (this.omega = d / Math.max(o, 1)),
         (this.wash = Math.abs(f) > w * 1.15),
         (this.scrub = Math.max(0, Math.abs(f) / Math.max(w, 0.01) - 1)),
-        (this.washT = Math.abs(f) > w * 1.6 ? (this.washT || 0) + A : Math.max(0, (this.washT || 0) - 2 * A)));
+        (this.washT = Math.abs(f) > w * 1.6 || this.smear > 0.45 ? (this.washT || 0) + A : Math.max(0, (this.washT || 0) - 2 * A)));
       let m = this.pylon();
       if (t.skiModel === "flow") this.stepFlow(A, t, m, o, a, c);
       else if (t.ropeModel === "pendulum") this.stepSwing(A, t, m, d, a, c, o);
@@ -4407,15 +4644,42 @@ var ho = class {
           (this.speed = Math.hypot(this.vx, this.vz)));
       }
       let M = Math.atan2(this.vx, -this.vz * this.dir);
-      ((this.chi = M), (this.psi = t.skiModel === "flow" ? this.heading : M + 0.18 * this.edge));
+      // (a setup that slides its tail more than stock shows it: the ski points further round)
+      ((this.chi = M), (this.psi = t.skiModel === "flow" ? this.heading : M + 0.18 * this.edge + Math.sign(this.edge) * (this.smear - this.smear0)));
       let D = this.accelLat;
-      this.leanReq += (Math.atan2(this.want ?? D, t.g) - this.leanReq) * (1 - Math.exp(-A / 0.08));
-      let j = Math.max(-t.maxLean, Math.min(t.maxLean, this.leanReq)),
-        p = t.leanK * (j - this.lean) - t.leanC * this.leanRate;
-      ((this.leanRate = Math.max(-t.leanRateMax, Math.min(t.leanRateMax, this.leanRate + p * A))),
+      // (the lean a load asks for builds over a moment; it is gone as soon as the load is)
+      {
+        let rq = Math.atan2(this.want ?? D, t.g);
+        this.leanReq += (rq - this.leanReq) * (1 - Math.exp(-A / (t.exp && (Math.abs(rq) < Math.abs(this.leanReq) || rq * this.leanReq < 0) ? 0.02 : 0.08)));
+      }
+      // the body cannot lean much further than the ski is edged: as the ski rolls flat in the
+      // edge change the skier comes up with it
+      // (experimental only; normal has the one stiffness and the one rate both ways)
+      let jMax = t.exp ? Math.min(t.maxLean, (Math.abs(this.edge) * t.maxLean) / t.maxEdge + t.leanOver) : t.maxLean;
+      // (and on the way out to the buoy, no further than the arm has let it go)
+      t.exp && this.preTurn && (jMax = Math.min(jMax, t.leanTwo + (t.maxLean - t.leanTwo) * this.armS));
+      let j = Math.max(-jMax, Math.min(jMax, this.leanReq)),
+        // (and it is pulled up far more firmly than it falls in)
+        up = t.exp && this.lean * (j - this.lean) < 0 ? t.leanUpK : 1,
+        p = up * t.leanK * (j - this.lean) - Math.sqrt(up) * t.leanC * this.leanRate,
+        lr = this.leanRate + p * A,
+        lrMax = t.exp && this.lean * lr < 0 ? t.leanRise : t.leanRateMax;
+      ((this.leanRate = Math.max(-lrMax, Math.min(lrMax, lr))),
         (this.lean += this.leanRate * A),
-        (this.skiX = this.x - this.dir * t.hipHeight * Math.sin(this.lean)),
+        (this.skiX = this.x - this.dir * t.hipHeight * Math.sin(this.lean + this.lay)),
         (this.skiZ = this.z));
+      if (t.exp) {
+        let short = Math.max(0, Math.min(1, (t.layFrom - this.rope) / (t.layFrom - t.layFull))),
+          sg = Math.sign(this.edgeCmd),
+          // on the inside edge and still travelling outward: it goes exactly as far as the
+          // arm has let the handle out, and comes off slowly through the finish of the turn
+          on = this.preTurn && this.cast > 0.01;
+        this.pre = on ? Math.max(this.armS, this.pre * Math.exp(-A / t.layOut)) : this.pre * Math.exp(-A / t.layOut);
+        on && (this.laySg = sg);
+        let tgt = (this.laySg || 0) * this.pre * (t.layBase + t.layShort * short);
+        this.lay += (tgt - this.lay) * (1 - Math.exp(-A / 0.05));
+        this.lay = Math.max(-t.layMax - this.lean, Math.min(t.layMax - this.lean, this.lay));
+      }
       let E = t.reachBase + (t.reachLean + t.reachOneHand) * this.cast;
       this.slack || (this.reach += Math.max(-t.reachInRate * A, Math.min(t.reachOutRate * A, Math.max(E, t.reachBase) - this.reach)));
       let y = this.slackT;
@@ -4889,7 +5153,7 @@ var K_ = {
 var Cu = 46,
   ju = 1,
   H = {
-    rope: 18.25,
+    rope: 14.25,
     speed: 58,
     maxKmh: 58,
     dir: 1,
@@ -6912,18 +7176,37 @@ var Xs = [],
   wu = new B(),
   fu = new B();
 for (let i = 0; i <= sn; i++) Xs.push(new B());
-// i = handle end, A = pylon, e = metres of truly loose line, belly = droop of a light line
-function Tg(i, A, e, belly = 0) {
-  let t = i.distanceTo(A),
-    n = window.__forceLoose !== void 0 ? window.__forceLoose : e !== void 0 ? e : Math.max(0, H.rope - t),
-    loose = Math.sqrt(Math.max(0, (3 * n * t) / 8)),
+// The shape a line hangs in: t = straight distance between its ends, e = metres of truly
+// loose line, belly = droop of a light line, yi / yA = heights of its two ends.
+function ropeHang(t, e, belly, yi, yA) {
+  let n = window.__forceLoose !== void 0 ? window.__forceLoose : e !== void 0 ? e : Math.max(0, H.rope - t),
+    loose = Math.sqrt(Math.max(0, (3 * n * t) / 8));
+  return {
+    n,
     // A loose line hangs in one smooth curve. It cannot hang lower than the water, so beyond
     // that its middle simply lies along the surface (more slack = a longer, flatter stretch
     // afloat) and is dragged back a little behind the boat's line. It used to be a deep
     // parabola chopped off at the water, which left a sharp corner where it touched down.
-    s = window.__forceSag !== void 0 ? window.__forceSag : Math.min(Math.hypot(loose, belly), (i.y + A.y) * 0.62 + 0.2),
-    p = 2 + Math.min(2, n * 1.2),
-    lag = Math.min(1.1, 0.3 * loose) * H.dir,
+    s: window.__forceSag !== void 0 ? window.__forceSag : Math.min(Math.hypot(loose, belly), (yi + yA) * 0.62 + 0.2),
+    p: 2 + Math.min(2, n * 1.2),
+    lag: Math.min(1.1, 0.3 * loose) * H.dir,
+  };
+}
+// Which way the line leaves the handle: straight at the pylon when it is tight, dropping away
+// below that as it goes slack. (The curve below is end + (pylon - end) a - s sh(a), so its
+// slope at the handle end is the straight line plus 2 p s downward.) Returns out.
+function ropeLeave(out, from, pylon, e, belly) {
+  let t = from.distanceTo(pylon),
+    h = ropeHang(t, e, belly, from.y, pylon.y);
+  return out
+    .subVectors(pylon, from)
+    .add($i.set(0, -2 * h.p * h.s, 2 * h.p * h.lag))
+    .normalize();
+}
+// i = handle end, A = pylon, e = metres of truly loose line, belly = droop of a light line
+function Tg(i, A, e, belly = 0) {
+  let t = i.distanceTo(A),
+    { n, s, p, lag } = ropeHang(t, e, belly, i.y, A.y),
     W = 0.035,
     K = 0.08;
   for (let o = 0; o <= sn; o++) {
@@ -8458,6 +8741,7 @@ var GEAR = (() => {
     });
   le.add(handle);
   let r = new V3_(),
+    rh = new V3_(),
     b = new V3_(),
     n = new V3_(),
     zp = new V3_(),
@@ -8492,11 +8776,13 @@ var GEAR = (() => {
   // on as soon as the turn starts to finish (it used to drift back on a long fading curve and
   // then snap the last few centimetres)
   let grab = { g: 0, side: 0, out: !1, prev: 0 };
-  function update(chest, sr, hc, pylon, bodyUp, freeSide, pelvis, reachAmt = 0, dt = 1 / 60, faceYaw = 0, headUp = Y) {
+  // leave = unit direction in which the rope leaves the handle (null: straight at the pylon)
+  function update(chest, sr, hc, pylon, bodyUp, freeSide, pelvis, reachAmt = 0, dt = 1 / 60, faceYaw = 0, headUp = Y, leave = null) {
     // the head sits on the neck and tips with it; the face keeps looking down the course
     head.position.copy(chest).addScaledVector(bodyUp, 0.08).addScaledVector(headUp, 0.118);
     (head.quaternion.setFromUnitVectors(Y, headUp), head.rotateY(faceYaw));
-    if (!grab.out && freeSide && reachAmt > 0.3 && reachAmt >= grab.prev) ((grab.out = !0), (grab.side = freeSide));
+    // (experimental skiing: the hand leaves at the start of the reach, and the lean follows it)
+    if (!grab.out && freeSide && reachAmt > (xe.exp ? 0.1 : 0.3) && reachAmt >= grab.prev) ((grab.out = !0), (grab.side = freeSide));
     else if (grab.out && ((reachAmt < 0.8 && reachAmt < grab.prev - 1e-5) || reachAmt < 0.1)) grab.out = !1;
     grab.prev = reachAmt;
     grab.g = Math.max(0, Math.min(1, grab.g + (grab.out ? dt / 0.4 : -dt / 0.36)));
@@ -8522,8 +8808,18 @@ var GEAR = (() => {
       (t1.copy(b), b.multiplyScalar(c).addScaledVector(n, -sn), n.multiplyScalar(c).addScaledVector(t1, sn));
       hc.addScaledVector(t1, -GRIP).addScaledVector(b, GRIP);
     }
+    // A slack line does not hold the bridle out: the triangle hangs with the rope, as its
+    // continuation. The bar is a round grip, so it simply turns in the fingers; the hands,
+    // wrists and arms stay exactly where they were. (It can only swing about the bar, so with
+    // the bar rolled upright in one hand it follows the rope less.)
+    rh.copy(r);
+    if (leave) {
+      rh.copy(leave).addScaledVector(b, -leave.dot(b));
+      // (never folded back past a right angle to where a tight rope would hold it)
+      rh.lengthSq() > 1e-6 && rh.normalize().dot(r) > 0.15 ? (n.crossVectors(b, rh).normalize(), t2.copy(rh).negate()) : rh.copy(r);
+    }
     (handle.matrix.makeBasis(b, n, t2).setPosition(hc), (handle.matrixWorldNeedsUpdate = !0));
-    apex.copy(hc).addScaledVector(r, handle.userData.apex + 0.04);
+    apex.copy(hc).addScaledVector(rh, handle.userData.apex + 0.04);
     cs.copy(chest);
     // reaching turns the shoulders round the spine: the holding one goes toward the boat, the
     // free one opens back. Both stay on the torso, which turns with them.
@@ -8589,7 +8885,7 @@ var GEAR = (() => {
 // ---- view: first person (default) or the chase camera -------------------------------------------
 // Players always get first person. The chase camera is a testing aid: it is picked in the
 // Settings section of the start screen, and only then does the V key switch views.
-var VIEW = { mode: "fp", eye: new V3_(), ready: !1, headParts: [], test: !1, neck: 0.25, near: 0.04 };
+var VIEW = { mode: "fp", eye: new V3_(), ready: !1, headParts: [], test: !1, neck: 0.25, neckLay: 0.5, near: 0.04 };
 try {
   localStorage.getItem("slalom259.view") === "chase" && ((VIEW.mode = "chase"), (VIEW.test = !0));
 } catch {}
@@ -9128,7 +9424,7 @@ function Sg() {
   let i = Og();
   if (!i) {
     ((H.running = !1),
-      (FA.endLabel.textContent = "Tour complete"),
+      (FA.endLabel.textContent = "Set complete"),
       (FA.endScore.textContent = String(H.totalBuoys)),
       (FA.endMsg.textContent = H.gateMisses ? "Shortest line, top speed. Gates missed along the way: " + H.gateMisses + "." : "Shortest line, top speed, every pass clean."),
       (FA.endPeak.textContent = String(Math.round(H.peakSpeed))),
@@ -9224,6 +9520,26 @@ var XP = new B(0, 1, 0),
     pullBoat: 4, // m before the 55 m pre-gates at which the boat triggers the pull-out
     pullEdge: 0.26, // how hard the pull-out leans (0..1)
     turnInRate: 0.85, // per second: how fast the lean builds in the turn-in for the gate
+    // Experimental skiing only (xe.exp):
+    // In the course the pull is always a full one. When the edge is let go the skier does not
+    // snap onto the new one: the inside edge starts light and builds steadily (rampE0 up to
+    // full, over a time picked from ramps), so the ski runs out on one continuous arc with
+    // the widest point just before the buoy.
+    // The pulling edge is not dropped either: it is eased off over rollOff seconds, slowly at
+    // first, so the ski runs on through the wakes rolling flat while the skier comes up.
+    rollOff: 0.3,
+    // Through the entry gate the lean is held to the first wake (m past the centre line, so
+    // negative) and what is trimmed is how hard it is: turning in, the skier leans just hard
+    // enough that letting go there will carry the ski round the first buoy with clHi metres
+    // or less to spare. (In the course the pull is full and it is its length that varies.)
+    edgeFrom: -1,
+    clHi: 1,
+    pullMin: 0.4,
+    rampE0: 0.2, // share of the inside edge that builds at a steady rate (the rest builds late)
+    rampP: 2,
+    ramps: [0.3, 0.45, 0.65, 0.9, 1.2, 1.6],
+    apexLead: 0.5, // m before the buoy the widest point is aimed at
+    edgeLate: 2, // m past the centre line by which the edge is let go regardless
     gateLead: 0.3,
     margin: 0.35,
     flowK: 3.2,
@@ -9283,7 +9599,7 @@ function kg(i) {
 // would the ski be when it reaches the buoy?").
 var AP = {
   reset() {
-    ((this.phase = "approach"), (this.hold = 0), (this.k = -1), (this.best = -99), (this.tick = 0), (this.t0 = 0), (this.switched = !1));
+    ((this.phase = "approach"), (this.hold = 0), (this.k = -1), (this.best = -99), (this.tick = 0), (this.t0 = 0), (this.switched = !1), (this.stage = 0), (this.arc = !1));
     // soft control: an edge setting (travel frame, -1..1) approached at a limited rate
     ((this.soft = !0), (this.tgt = 0), (this.want = 0), (this.rate = 1.5), (this.exitE = -1), (this.exitOn = !1));
   },
@@ -9312,6 +9628,58 @@ function apRun(s, u, stop, tMax, tSwitch = 1e9, u2 = 0) {
     }
   }
   return s;
+}
+// the inside edge setting t seconds after the edge was let go, on a ramp Tr seconds long
+// (negative: still on the pulling edge, easing off from e0)
+function apRamp(t, Tr, e0 = 1) {
+  let u = t / qe.rollOff;
+  if (u < 1) return -e0 * (1 - u * u);
+  let s = Math.min(1, (t - qe.rollOff) / Tr);
+  return qe.rampE0 * s + (1 - qe.rampE0) * Math.pow(s, qe.rampP);
+}
+// "if I let the edge go now (or carry on, t0 seconds into it) and build the inside edge over
+// Tr seconds, where is the ski when it reaches the buoy, and how far before the buoy was it
+// at its widest?" cl = how far outside the buoy, lead = metres before the buoy (negative:
+// still going out as it passes)
+// gate = how far off the middle of the entry gate the ski goes through it (positive: already
+// across, toward the first buoy), when that is still ahead (0 once through)
+// plan = { P, from, tgt, rate }: first carry on pulling at P until the skier is `from` metres
+// past the centre line, and only then let go
+function apArcTest(b, dir, Tr, t0 = 0, e0 = Math.abs(nA.edgeCmd), plan = null) {
+  let sd = b.side,
+    pk = -99,
+    pz = 0,
+    gz = dir > 0 ? ie.gateZ : ie.exitZ,
+    gate = 0,
+    loose = 0,
+    hit = null,
+    after = 0,
+    tr = plan ? -1 : 0,
+    c = apRun(
+      apClone(),
+      (q, t) => {
+        if (tr < 0) {
+          if (sd * q.x < plan.from) return apEdge(q, apToward(plan.tgt, sd * dir * plan.P, plan.rate * t));
+          ((tr = t), (e0 = Math.abs(q.edgeCmd)));
+        }
+        return apEdge(q, -sd * dir * apRamp(t0 + t - tr, Tr, e0));
+      },
+      (q, px) => {
+        let w = sd * q.skiX;
+        w > pk && ((pk = w), (pz = q.z));
+        HA.next < 1 && !gate && dir * (q.z - gz) <= 0 && (gate = sd * q.skiX + 1e-6);
+        q.loose > loose && (loose = q.loose);
+        if (!hit && dir * (q.z - b.z) <= 0) {
+          hit = { skiX: q.skiX, vx: q.vx, pz };
+          // (a plan is followed a moment past the buoy too, to see whether the rope goes loose there)
+          if (!plan) return !0;
+        }
+        return hit && ++after > 190;
+      },
+      plan ? 4.3 : 3.5,
+    );
+  if (!hit || c.fallen) return { cl: -99, lead: -99, gate: 99 };
+  return { cl: sd * hit.skiX - ze.buoyOffset, lead: sd * hit.vx < 0 ? dir * (hit.pz - b.z) : -1 - 0.3 * sd * hit.vx, gate, Tr, loose };
 }
 // the input that walks the skier's edge setting toward a target, as light taps would
 function apEdge(q, target) {
@@ -9346,9 +9714,13 @@ function Gg() {
     } else if (AP.phase === "pull") {
       // a light, progressive lean out to the side, let go once the glide will carry wide enough
       ((AP.want = out * qe.pullEdge), (AP.rate = 1.4), (AP.t0 += T));
-      let wide = Math.max(6, Math.min(10, 0.6 * (H.rope + 0.6))),
+      // (a harder pull-out is meant to go wider, a softer one settles for less: the width
+      // aimed for goes with the intensity, so the pull lasts about as long either way)
+      // (at its default intensity, 0.7: well up on the boat, about as wide as the buoy line
+      // on a 13 m rope, and never more than 1.5 m outside it however long the rope)
+      let wide = xe.exp ? Math.max(2, Math.min(0.95 * H.rope, Math.min(0.85 * (H.rope + 0.6), 13) * (qe.pullEdge / 0.7))) : Math.max(2, Math.min(0.95 * H.rope, Math.max(6, Math.min(10, 0.6 * (H.rope + 0.6))) * (qe.pullEdge / 0.26))),
         c = apRun(apClone(), apSoft(0, 1.1), (q) => q.vx * s1 > 0.3, 3.5);
-      (c.peak >= wide || AP.t0 > 2.6 || toGate < we.speed * 2.2) && (AP.phase = "glide");
+      (c.peak >= wide || AP.t0 > (xe.exp ? 3.4 : 2.6) || toGate < we.speed * 2.2) && (AP.phase = "glide");
     } else if (AP.phase === "glide") {
       // stand tall and glide until a smooth turn-in started now would cross the centre line
       // right at the gate
@@ -9359,24 +9731,90 @@ function Gg() {
     } else if (AP.phase === "turnin") {
       // the lean builds steadily through the gate
       ((AP.want = -out * apTurnIn()), (AP.rate = qe.turnInRate));
-      HA.next >= 1 && (AP.phase = "course");
+      // (experimental: the pull for the first buoy can be eased off before the gate, like any other)
+      (HA.next >= 1 || (xe.exp && s1 * nA.x > -8 && toGate < 12)) && (AP.phase = "course");
     }
     if (AP.phase === "course") {
       let k = HA.next <= 0 ? 1 : HA.next;
       if (k <= 6 && !(k === 6 && AP.k === 6 && AP.switched)) {
-        AP.soft = !1;
-        let b = HA.order[k - 1];
-        k !== AP.k && ((AP.k = k), (AP.hold = b.side), (AP.switched = !1), (AP.best = -99));
+        let b = HA.order[k - 1],
+          sd = b.side;
+        // (through the gate the turn-in's own lean carries on as the pull for the first buoy:
+        // no sudden jab of full edge)
+        if (k !== AP.k) {
+          ((AP.k = k), (AP.hold = sd), (AP.switched = !1), (AP.best = -99), (AP.stage = 0), (AP.arc = !1));
+          // (experimental: the pull is a setting too, starting from the edge the skier has)
+          xe.exp && ((AP.tgt = nA.edgeCmd), (AP.P = k === 1 ? apTurnIn() : 1));
+        }
+        AP.soft = xe.exp && AP.stage === 0 && AP.human === void 0;
         if (AP.human !== void 0 && HA.next >= 1)
           AP.hold = -Math.sign(nA.x + AP.human * nA.vx) || AP.hold; // test rider: change edge on the centre line
-        else if (!AP.switched) {
-          let c = apRun(apClone(), -b.side * dir, (q) => dir * (q.z - b.z) <= 0, 3),
-            cl = c.done ? b.side * c.skiX - ze.buoyOffset : -99;
-          // change edge as soon as that clears the buoy, or once waiting any longer only makes it worse
-          // (qe.late holds the pull that much longer: a test rider who overdoes it)
-          (AP.lateT > 0 || cl >= qe.margin || (cl < AP.best - 0.03 && AP.best > -5)) && (AP.lateT = (AP.lateT || 0) + T);
-          AP.lateT > (qe.late || 0) && ((AP.hold = -b.side), (AP.switched = !0), (AP.lateT = 0));
-          AP.best = Math.max(AP.best, cl);
+        else if (!xe.exp) {
+          // normal skiing: hold one side and pick the moment to change straight to the other
+          if (!AP.switched) {
+            let c = apRun(apClone(), -sd * dir, (q) => dir * (q.z - b.z) <= 0, 3),
+              cl = c.done ? sd * c.skiX - ze.buoyOffset : -99;
+            // change edge as soon as that clears the buoy, or once waiting any longer only makes it worse
+            // (qe.late holds the pull that much longer: a test rider who overdoes it)
+            (AP.lateT > 0 || cl >= qe.margin || (cl < AP.best - 0.03 && AP.best > -5)) && (AP.lateT = (AP.lateT || 0) + T);
+            AP.lateT > (qe.late || 0) && ((AP.hold = -sd), (AP.switched = !0), (AP.lateT = 0));
+            AP.best = Math.max(AP.best, cl);
+          }
+        } else if (AP.stage === 0) {
+          // experimental skiing.
+          // The pull: full, and held until letting go now would still carry the ski round
+          // the buoy on a steadily building inside edge, with its widest point just before
+          // the buoy. Past edgeLate it is let go anyway, on whichever build gets widest.
+          // (Turning in for the gate the lean is a setting, AP.P, trimmed on the way in.)
+          let gateAhead = k === 1 && HA.next < 1,
+            pre = gateAhead && sd * nA.x < qe.edgeFrom;
+          ((AP.want = sd * dir * AP.P), (AP.rate = k === 1 ? qe.turnInRate : 20));
+          if (sd * nA.x > -Math.max(8, 0.75 * H.rope)) {
+            let pick = null,
+              wide = null,
+              off = 0,
+              lim = ze.gateHalf - 0.45,
+              plan = pre ? { P: AP.P, from: qe.edgeFrom, tgt: AP.tgt, rate: AP.rate } : null;
+            for (let Tr of qe.ramps) {
+              let r = apArcTest(b, dir, Tr, 0, Math.abs(nA.edgeCmd), plan);
+              if (Math.abs(r.gate) > lim) {
+                r.gate < 50 && (off = r.gate); // would miss the gate
+                continue;
+              }
+              (!wide || r.cl > wide.cl) && (wide = r);
+              r.cl >= qe.margin && r.lead >= qe.apexLead && (!pick || r.lead < pick.lead) && (pick = r);
+            }
+            if (pre) {
+              // not at the wakes yet: lean harder if that would fall short, ease up if it is more than enough
+              // (the gate comes first: across too soon is too hard a lean, too late too soft)
+              // (and never harder than the lean the turn-in was timed for, or it crosses early)
+              let top = apTurnIn();
+              if (!wide && off) AP.P = Math.max(qe.pullMin, Math.min(top, AP.P - 0.1 * Math.sign(off)));
+              else if (!pick) (!wide || wide.gate < lim - 0.4) && (AP.P = Math.min(top, AP.P + 0.1));
+              // (more than enough also means arriving so fast that the rope goes loose at the buoy)
+              else if (pick.cl > qe.clHi || pick.loose > 0.1) AP.P = Math.max(qe.pullMin, AP.P - 0.05);
+            } else {
+              let late = HA.next >= 1 && (sd * nA.skiX > qe.edgeLate || (wide && wide.cl < AP.best - 0.1 && AP.best > -5 && sd * nA.x > 1));
+              wide && (AP.best = Math.max(AP.best, wide.cl));
+              if (pick || (late && wide)) {
+                ((AP.stage = 1), (AP.arc = !0), (AP.arcSd = sd), (AP.Tr = (pick || wide).Tr), (AP.rt = 0), (AP.e0 = Math.abs(nA.edgeCmd)));
+              }
+            }
+          }
+        } else if (AP.stage === 1) {
+          // on the way out: keep trimming how fast the edge builds, then hold the full edge
+          // through the turn and into the next pull
+          // (the last buoy: once the pulling edge is off, the exit turn takes over)
+          if (k === 6 && AP.rt >= qe.rollOff) ((AP.switched = !0), (AP.arc = !1), (AP.soft = !1));
+          let best = null;
+          for (let Tr of [AP.Tr, AP.Tr * 0.85, AP.Tr * 1.18]) {
+            if (Tr + qe.rollOff <= AP.rt) continue;
+            let r = apArcTest(b, dir, Tr, AP.rt, AP.e0),
+              score = (r.cl < qe.margin ? 100 + (qe.margin - r.cl) * 10 : 0) + Math.abs(r.lead - qe.apexLead);
+            (!best || score < best.score - 0.05) && (best = { Tr, score });
+          }
+          best && (AP.Tr = best.Tr);
+          AP.rt >= AP.Tr + qe.rollOff && ((AP.stage = 2), (AP.arc = !1), (AP.hold = -sd), (AP.switched = !0));
         }
       } else {
         // from the edge change for the last buoy onward: one steady, unhurried turn round it
@@ -9399,14 +9837,17 @@ function Gg() {
                 4,
               );
             // rounding the buoy always outranks hitting the gate
-            return (c.done && !c.fallen ? Math.abs(c.x) : 99) + (cl < 0.25 ? 1000 + (0.25 - cl) * 1000 : 0);
+            let need = xe.exp ? 0.35 : 0.25;
+            return (c.done && !c.fallen ? Math.abs(c.x) : 99) + (cl < need ? 1000 + (need - cl) * 1000 : 0);
           },
           cand = [];
         if (!AP.exitOn) {
           // first look: start from the edge the skier already has, so nothing snaps
           ((AP.exitOn = !0), (AP.soft = !0), (AP.tgt = nA.edgeCmd), (AP.rate = 8));
           for (let E = 0.1; E <= 1.001; E += 0.075) cand.push(E);
-        } else cand = [AP.exitE, Math.max(0.05, AP.exitE - 0.04), Math.min(1, AP.exitE + 0.04)];
+          // (experimental: once round the buoy the skier may also edge back out a little, to
+          // check a swing in toward the wakes that would carry on past the gate)
+        } else cand = [AP.exitE, Math.max(xe.exp && HA.next > 6 ? -0.4 : 0.05, AP.exitE - 0.04), Math.min(1, AP.exitE + 0.04)];
         let best = 1e9;
         for (let E of cand) {
           let m = tryE(E);
@@ -9416,6 +9857,7 @@ function Gg() {
       }
     }
   }
+  if (AP.arc) return ((AP.rt += $n), apEdge(nA, -AP.arcSd * dir * apRamp(AP.rt, AP.Tr, AP.e0)));
   if (!AP.soft) return AP.hold * dir;
   AP.tgt = apToward(AP.tgt, AP.want, AP.rate * $n);
   return apEdge(nA, AP.tgt);
@@ -9439,6 +9881,8 @@ window.__skierBox = () => {
     }
   );
 };
+// debug: hand the autopilot's internals to a test function
+window.__apLab = (fn) => fn({ AP, apClone, apRun, apEdge, qe, ze, H, dt: $n, step: Fg, get nA() { return nA; }, get we() { return we; }, get HA() { return HA; }, get ie() { return ie; } });
 window.__judge = () => ({ status: HA.status, buoys: HA.buoys, results: HA.results, messages: HA.messages, next: HA.next, dir: HA.dir });
 window.__skierDir = () => {
   let i = new B();
@@ -9491,6 +9935,19 @@ try {
   (A === "pendulum" || A === "particle") && (xe.ropeModel = A);
   let e = i.get("ski");
   (e === "flow" || e === "particle") && (xe.skiModel = e);
+  // ?mode=experimental (or normal) picks the skiing model for the session
+  let md = i.get("mode");
+  md && skiMode(md !== "legacy"); // ?mode=legacy for the older skiing; anything else is the default
+  // ?setup=depth:2.47,bind:29.75 skis the whole session on that setup (for trying one by hand)
+  let su = i.get("setup");
+  if (su) {
+    let o = {};
+    for (let kv of su.split(",")) {
+      let [k, v] = kv.split(":");
+      k in SKI.stock && isFinite(+v) && (o[k] = +v);
+    }
+    skiRide(o);
+  }
 } catch {}
 window.__tour = () => ({
   pass: H.pass,
@@ -9535,8 +9992,13 @@ window.__s = () =>
     bs: +(we.speed * 3.6).toFixed(1),
     n: H.frames,
   });
+// test rig: the inputs of one pass can be recorded and played back on another setup
+var REPLAY = { rec: null, play: null, i: 0, cache: {} };
 function Ju() {
-  return H.autopilot ? Gg() : H.input;
+  if (REPLAY.play) return REPLAY.play[REPLAY.i++] ?? 0;
+  let u = H.autopilot ? Gg() : H.input;
+  REPLAY.rec && REPLAY.rec.push(u);
+  return u;
 }
 function Fg(i) {
   if (H.coasting)
@@ -9567,6 +10029,214 @@ function Zg(i) {
   let A = 0;
   for (; Io >= $n && A++ < 120;) if (((Io -= $n), !Fg($n))) return;
 }
+
+
+// ---- 65_setup.js ----
+// =============================================================================
+// Ski setup controls (testing): steppers for the settings the physics understands, shown in
+// the Settings section of the start screen and, if switched on there, in a small panel that
+// stays on screen while skiing so a setting can be changed in the middle of a pass.
+// SKI.set is the one source of truth for the ski; these controls only call skiRide().
+// Below the ski come the skier's own dials for the gate: where the pull-out starts and how
+// hard it is. Those live in the autopilot's tuning (qe).
+// =============================================================================
+var SETUP = (() => {
+  // key, name, step, min, max, decimals, unit
+  let ROWS = [
+      ["len", "Ski length", 1, 64, 70, 0, '"'],
+      ["depth", "Fin depth", 0.005, 2.4, 2.6, 3, '"'],
+      ["length", "Fin length", 0.005, 6.7, 7, 3, '"'],
+      ["dft", "Fin from tail", 0.005, 0.68, 0.86, 3, '"'],
+      ["wing", "Wing angle", 1, 5, 12, 0, "\xB0"],
+      ["bind", "Front binding", 0.125, 28.5, 30.75, 3, '"'],
+    ],
+    // the skier's gate: key in qe, name, step, how to show it
+    GATE = [
+      ["pullBoat", "Pull-out start", 1, (v) => (v >= 0 ? v + " m early" : -v + " m late")],
+      ["pullEdge", "Pull-out intensity", 0.02, (v) => Math.round(v * 100) + "%"],
+    ],
+    // Each skiing model has its own default gate, in the middle of its own range. The
+    // experimental one is what skiers do: out 15 m before the pre-gates, and hard.
+    GATE_N = { pullBoat: qe.pullBoat, pullEdge: qe.pullEdge },
+    GATE_X = { pullBoat: 15, pullEdge: 0.7 },
+    gate0 = () => (xe.exp ? GATE_X : GATE_N),
+    gateRange = (k) => (xe.exp ? { pullBoat: [-5, 35], pullEdge: [0.4, 1] } : { pullBoat: [-15, 30], pullEdge: [0.1, 0.7] })[k],
+    gateClamp = (k, v) => Math.max(gateRange(k)[0], Math.min(gateRange(k)[1], v)),
+    GKEY = "slalom259.gate",
+    gateStock = () => GATE.every(([k]) => qe[k] === gate0()[k]),
+    gateSave = () => store(GKEY, gateStock() ? null : JSON.stringify({ pullBoat: qe.pullBoat, pullEdge: qe.pullEdge })),
+    KEY = "slalom259.setup",
+    PANEL = "slalom259.setupPanel",
+    hosts = [],
+    store = (k, v) => {
+      try {
+        v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v);
+      } catch {}
+    },
+    read = (k) => {
+      try {
+        return localStorage.getItem(k);
+      } catch {
+        return null;
+      }
+    },
+    isStock = () => ROWS.every(([k]) => SKI.set[k] === SKI.stock[k]),
+    show = (k, v, dec, unit) => (k === "wing" && !(v > 0) ? "none" : v.toFixed(dec) + unit);
+  function apply(set) {
+    (skiRide(set), store(KEY, isStock() ? null : JSON.stringify(SKI.set)), render());
+  }
+  function nudge(row, dir) {
+    let [k, , step, lo, hi] = row,
+      v = SKI.set[k],
+      n;
+    // the wing can also come off altogether: one step below its smallest angle
+    if (k === "wing") n = v > 0 ? (v + dir < lo ? 0 : Math.min(hi, v + dir)) : dir > 0 ? lo : 0;
+    else n = Math.max(lo, Math.min(hi, +(Math.round((v + dir * step) / step) * step).toFixed(4)));
+    apply(Object.assign({}, SKI.set, { [k]: n }));
+  }
+  function nudgeGate(row, dir) {
+    let [k, , step] = row;
+    qe[k] = gateClamp(k, +(Math.round((qe[k] + dir * step) / step) * step).toFixed(4));
+    (gateSave(), render());
+  }
+  function word(bal) {
+    return bal > 1.03 ? "looser than stock: turns in quicker, tail slides more, less width" : bal < 0.97 ? "more locked than stock: holds and carries speed, runs wider and later" : "stock balance";
+  }
+  function render() {
+    let r = xe.ride,
+      bal = r.tip / (r.hold * r.lever);
+    for (let h of hosts) {
+      h.innerHTML = "";
+      if (h.id === "setupPanel") {
+        let t = document.createElement("div");
+        ((t.className = "stitle"), (t.textContent = "Ski setup"), h.appendChild(t));
+      }
+      for (let row of ROWS) {
+        let [k, name, , , , dec, unit] = row,
+          el = document.createElement("div"),
+          nm = document.createElement("span"),
+          val = document.createElement("span"),
+          btn = (txt, dir) => {
+            let b = document.createElement("button");
+            ((b.className = "sbtn"), (b.textContent = txt), (b.onclick = () => nudge(row, dir)));
+            return b;
+          };
+        ((el.className = "srow"), (nm.className = "sname"), (nm.textContent = name));
+        ((val.className = "sval" + (SKI.set[k] === SKI.stock[k] ? "" : " mod")), (val.textContent = show(k, SKI.set[k], dec, unit)));
+        ((val.title = "stock " + show(k, SKI.stock[k], dec, unit)), el.append(nm, btn("\u2212", -1), val, btn("+", 1)), h.appendChild(el));
+      }
+      let info = document.createElement("div");
+      ((info.className = "sinfo"), (info.textContent = "Tail hold \xD7" + (r.hold * r.lever).toFixed(2) + " \xB7 tip \xD7" + r.tip.toFixed(2) + " \xB7 balance " + bal.toFixed(2) + " (" + word(bal) + ")"), h.appendChild(info));
+      let gt = document.createElement("div");
+      ((gt.className = "stitle"), (gt.style.marginTop = "8px"), (gt.textContent = "Skier: gate"), h.appendChild(gt));
+      for (let row of GATE) {
+        let [k, name, , fmt] = row,
+          el = document.createElement("div"),
+          nm = document.createElement("span"),
+          val = document.createElement("span"),
+          btn = (txt, dir) => {
+            let b = document.createElement("button");
+            ((b.className = "sbtn"), (b.textContent = txt), (b.onclick = () => nudgeGate(row, dir)));
+            return b;
+          };
+        ((el.className = "srow"), (nm.className = "sname"), (nm.textContent = name));
+        ((val.className = "sval" + (qe[k] === gate0()[k] ? "" : " mod")), (val.textContent = fmt(qe[k])), (val.title = "default " + fmt(gate0()[k])));
+        (el.append(nm, btn("\u2212", -1), val, btn("+", 1)), h.appendChild(el));
+      }
+      let gi = document.createElement("div");
+      ((gi.className = "sinfo"), (gi.textContent = "The pull-out starts when the boat is " + Math.abs(qe.pullBoat) + " m " + (qe.pullBoat >= 0 ? "short of" : "past") + " the 55 m gates."), h.appendChild(gi));
+      let rs = document.createElement("button");
+      ((rs.className = "sreset"), (rs.textContent = "Reset all"), (rs.style.visibility = isStock() && gateStock() ? "hidden" : "visible"), h.appendChild(rs));
+      rs.onclick = () => (Object.assign(qe, gate0()), store(GKEY, null), apply());
+    }
+    let sum = document.querySelector("#settings summary"),
+      tags = [];
+    (xe.exp || tags.push("legacy skiing"), (isStock() && gateStock()) || tags.push("custom setup"));
+    sum && (sum.textContent = ["Settings"].concat(tags).join(" \xB7 "));
+  }
+  // the panel that stays up while skiing; taps on it must not reach the edge control
+  let panel = document.createElement("div");
+  ((panel.id = "setupPanel"), (panel.className = "setup hidden"));
+  for (let ev of ["pointerdown", "pointerup", "touchstart", "mousedown", "click"]) panel.addEventListener(ev, (e) => e.stopPropagation());
+  FA.end.after(panel);
+  let menu = document.getElementById("setupMenu");
+  (menu && hosts.push(menu), hosts.push(panel));
+  function panelChips() {
+    let el = document.getElementById("setupChips");
+    if (!el) return;
+    el.innerHTML = "";
+    let on = !panel.classList.contains("hidden"),
+      c = document.createElement("div");
+    ((c.className = "chip" + (on ? " on" : "")), (c.textContent = "Keep this panel on screen while skiing"));
+    c.onclick = () => (panel.classList.toggle("hidden"), store(PANEL, panel.classList.contains("hidden") ? null : "1"), panelChips());
+    el.appendChild(c);
+  }
+  read(PANEL) === "1" && panel.classList.remove("hidden");
+  // a setup given in the address wins; otherwise the one left from last time
+  let fromUrl = !1;
+  try {
+    fromUrl = new URLSearchParams(location.search).has("setup");
+  } catch {}
+  if (!fromUrl) {
+    let saved = read(KEY);
+    if (saved)
+      try {
+        let o = JSON.parse(saved),
+          q = {};
+        for (let [k] of ROWS) isFinite(+o[k]) && (q[k] = +o[k]);
+        skiRide(q);
+      } catch {}
+  }
+  // ---- the skiing model: Default, or Legacy (the older one, kept for comparison) -------------
+  // In the code the default model is still flagged xe.exp ("experimental", as it began) and
+  // the legacy one is what the comments call "normal".
+  let MODE = "slalom259.mode";
+  // switching model: a gate left at its default follows to the new model's default; one the
+  // user has set is kept (brought inside the new model's range)
+  function setMode(exp) {
+    let was = gateStock();
+    skiMode(exp);
+    for (let [k] of GATE) qe[k] = was ? gate0()[k] : gateClamp(k, qe[k]);
+    (gateSave(), modeChips(), render());
+    return xe.exp;
+  }
+  function modeChips() {
+    let el = document.getElementById("skiModeChips"),
+      info = document.getElementById("skiModeInfo");
+    if (!el) return;
+    el.innerHTML = "";
+    for (let [label, exp] of [
+      ["Default", !0],
+      ["Legacy", !1],
+    ]) {
+      let c = document.createElement("div");
+      ((c.className = "chip" + (xe.exp === exp ? " on" : "")), (c.textContent = label));
+      c.onclick = () => (store(MODE, exp ? null : "legacy"), setMode(exp));
+      el.appendChild(c);
+    }
+    info &&
+      (info.textContent = xe.exp
+        ? "Default: wide pull-out and glide for the gate, full pull, the edge eased off through the wakes, then a steady lean-in that follows the arm out to the buoy. Applies from the next pass."
+        : "Legacy: the older skiing, kept for comparison. Applies from the next pass.");
+  }
+  let urlMode = !1;
+  try {
+    urlMode = new URLSearchParams(location.search).has("mode");
+  } catch {}
+  urlMode || skiMode(read(MODE) !== "legacy");
+  // the gate: the model's default, or the one left from last time
+  Object.assign(qe, gate0());
+  {
+    let saved = read(GKEY);
+    if (saved)
+      try {
+        let o = JSON.parse(saved);
+        for (let [k] of GATE) isFinite(+o[k]) && (qe[k] = gateClamp(k, +o[k]));
+      } catch {}
+  }
+  (render(), panelChips(), modeChips());
+  return { render, apply, modeChips, setMode };
+})();
 
 
 // ---- 70_frame.js ----
@@ -9634,7 +10304,8 @@ function Xg(i, A) {
   ((VIEW.trim = (VIEW.trim ?? trimT) + (trimT - (VIEW.trim ?? trimT)) * Math.min(1, i * 7)), (VIEW.sinkY = (VIEW.sinkY ?? sinkT) + (sinkT - (VIEW.sinkY ?? sinkT)) * Math.min(1, i * 7)));
   dt.userData.trim && ((dt.userData.trim.rotation.x = VIEW.trim * TRIM_SIGN), (dt.userData.trim.position.y = -VIEW.sinkY));
   dt.position.set(a, P, c);
-  let h = -Math.max(-1.35, Math.min(1.35, nA.lean)) * 0.82 + v * 0.7;
+  // (the lay-in of the reach is drawn in full on top of the body's own lean)
+  let h = -Math.max(-1.29, Math.min(1.29, Math.max(-1.35, Math.min(1.35, nA.lean)) * 0.82 + (nA.lay || 0))) + v * 0.7;
   dt.rotation.set(-u * 0.85 * dir, dir > 0 ? -nA.psi : Math.PI + nA.psi, h);
   // handle, bridle, gloves and sleeves, all hung on the one leaning body: shoulders on the
   // spine, straight arms running down the body to a handle held low in front of the hips, on
@@ -9650,28 +10321,39 @@ function Xg(i, A) {
     // Bolt upright over the chest, a hard lean brought the high shoulder and upper arm to
     // within 4 cm of the lens, inside the near plane, so the view cut into them. Leaning
     // further with the spine fixes that but puts the chest in front of the eyes.
-    headUp = new V3_(0, 1, 0).lerp(bodyUp, VIEW.neck).normalize(),
+    // (laid right over at a buoy the head goes further with the body, or the trailing arm's
+    // shoulder ends up against the lens)
+    headUp = new V3_(0, 1, 0).lerp(bodyUp, VIEW.neck + (xe.exp ? VIEW.neckLay * Math.max(0, Math.min(1, (Math.abs(nA.lean * 0.82 + (nA.lay || 0)) - 1) / 0.3)) : 0)).normalize(),
     eyeW = chest.clone().addScaledVector(bodyUp, 0.08),
     toBoat = new V3_().subVectors(o, chest).normalize(),
     // in the pre-turn the skier lets the handle out: arm straight and high toward the boat
     reachAmt = nA.fallen ? 0 : nA.cast,
+    // (experimental) running out from the wakes while the ski changes edge the skier is
+    // composed: both hands on, the handle held in to the body, elbows bent by the vest. It
+    // goes as the body comes up from the pull and is let out again with the reaching arm.
+    tuckT =
+      xe.exp && !nA.fallen
+        ? Math.max(0, 1 - Math.abs(nA.lean * 0.82 + (nA.lay || 0)) / 0.5) * Math.max(0, Math.min(1, (nA.speed / Math.max(6, we.target) - 1.1) / 0.2)) * Math.max(0, 1 - nA.cast / 0.5)
+        : 0,
+    tuck = (VIEW.tuck = (VIEW.tuck || 0) + (tuckT - (VIEW.tuck || 0)) * Math.min(1, i * 12)),
     // gathering the handle in to the hip (arms giving as the body comes inside the arc)
     fold = Math.max(0, Math.min(1, (xe.reachBase - nA.reach) / (xe.reachBase - xe.reachMin))),
-    hc = chest.clone().addScaledVector(toBoat.clone().multiplyScalar(0.8 + 0.2 * reachAmt).addScaledVector(bodyUp, -0.6 + 0.4 * reachAmt).normalize(), (0.722 + 0.1 * reachAmt) * (1 - 0.15 * fold));
+    hc = chest.clone().addScaledVector(toBoat.clone().multiplyScalar(0.8 + 0.2 * reachAmt).addScaledVector(bodyUp, -0.6 + 0.4 * reachAmt).normalize(), (0.722 + 0.1 * reachAmt) * (1 - 0.15 * fold) * (1 - 0.3 * tuck));
   eyeW.addScaledVector(headUp, 0.135);
   hc.y = Math.max(hc.y, P + 0.2);
   // the shoulders stay open to the boat whatever the ski is doing
   let sr = new V3_().crossVectors(toBoat, bodyUp).normalize(),
     I = Math.hypot(nA.x, nA.z - we.z),
     Q = nA.loose || 0,
-    freeHand = reachAmt > 0.04 && nA.edgeCmd ? -Math.sign(nA.edgeCmd) : 0,
-    apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, dt.localToWorld(new V3_(0, BODY.K.hipY, BODY.K.hipZ)), reachAmt, i, dir > 0 ? 0 : Math.PI, headUp);
+    freeHand = reachAmt > 0.04 && nA.edgeCmd ? -Math.sign(nA.edgeCmd) : 0;
   // A rope is only dead straight under real load. It has weight (and wind on it), so its belly
   // hangs by w L^2 / 8T: a hand's width cruising behind the boat, a clear droop whenever the
   // line goes light (gliding, reaching, the arms taking it up through a turn), and nothing at
   // all in the pull. It droops gently and snaps straight quickly, as a real line does.
   let sagT = nA.fallen ? 0 : Math.min(0.045 * I, (0.6 * I * I) / (8 * Math.max(nA.tension, 1)));
   VIEW.sag = (VIEW.sag || 0) + (sagT - (VIEW.sag || 0)) * Math.min(1, i * (sagT > (VIEW.sag || 0) ? 4.5 : 16));
+  // (the handle's own triangle hangs the way the rope leaves it)
+  let apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, dt.localToWorld(new V3_(0, BODY.K.hipY, BODY.K.hipZ)), reachAmt, i, dir > 0 ? 0 : Math.PI, headUp, ropeLeave(VIEW.leave || (VIEW.leave = new V3_()), hc, o, Q, VIEW.sag));
   Tg(apex, o, Q, VIEW.sag);
 
   // spray, churn and the ski's foam trail
@@ -9747,11 +10429,11 @@ function Xg(i, A) {
       x = HA.next === 0 ? (dir > 0 ? L.gateZ : L.exitZ) : HA.next <= 6 ? HA.order[HA.next - 1].z : dir > 0 ? L.exitZ : L.gateZ,
       Y = HA.next === 0 ? "gate" : HA.next <= 6 ? "buoy " + HA.next : "exit",
       U = Math.abs(nA.z - x);
-    FA.next.textContent = "P" + H.pass + " \xB7 " + Y + " in " + Math.round(U) + " m";
+    FA.next.textContent = "P" + H.pass + " \xB7 " + Y + " in " + Math.round(U) + " m" + (xe.exp ? "" : " \xB7 LEGACY");
   }
   let k = 180 / Math.PI;
   ((FA.telEdge.textContent = Math.round(Math.abs(nA.edge) * k) + "\xB0"),
-    (FA.telLean.textContent = Math.round(Math.abs(nA.lean) * k) + "\xB0"),
+    (FA.telLean.textContent = Math.round((xe.exp ? Math.min(1.29, Math.abs(nA.lean * 0.82 + (nA.lay || 0))) : Math.abs(nA.lean)) * k) + "\xB0"),
     (FA.telSlip.textContent = Math.round(Math.abs((nA.chi - (nA.psi || 0)) * k)) + "\xB0"),
     (FA.telBar.style.width = Math.min(100, (nA.tension / 4e3) * 100) + "%"));
   for (let L of Vs) {
@@ -9878,9 +10560,84 @@ window.__simPass = (dir, speed, rope, auto = !0, human) => {
     tMax = 0;
   let tr = (window.__trace = []),
     every = window.__traceEvery || 0;
-  for (; H.running && !H.coasting && HA.status === "running" && n < 240 * 90; n++) (every && n % every === 0 && tr.push([+(n / 240).toFixed(2), +(dir * (nA.z - ie.gateZ)).toFixed(1), +nA.x.toFixed(2), +nA.skiX.toFixed(2), +nA.vx.toFixed(1), AP.phase[0], AP.hold, +nA.edgeCmd.toFixed(2), +nA.lean.toFixed(2), +(nA.want || 0).toFixed(1), +nA.accelLat.toFixed(1), +nA.cast.toFixed(2), +nA.reach.toFixed(2), nA.slack ? +(1 + nA.loose).toFixed(2) : 0, +(nA.speed * 3.6).toFixed(0), Math.round(nA.tension), +(nA.drag / xe.mass).toFixed(1), +nA.sink.toFixed(2)]), Fg($n), HA.next >= 1 && HA.next <= 6 && (cN++, nA.loose > 0.03 && (sN++, (gap = Math.max(gap, nA.loose))), (vmin = Math.min(vmin, nA.speed)), (vmax = Math.max(vmax, nA.speed)), (tMax = Math.max(tMax, nA.tension))), (wide = Math.max(wide, Math.abs(nA.skiX))), (reach = Math.max(reach, nA.reach)), (comWide = Math.max(comWide, Math.abs(nA.x))));
+  for (; H.running && !H.coasting && HA.status === "running" && n < 240 * 90; n++) (every && n % every === 0 && tr.push([+(n / 240).toFixed(2), +(dir * (nA.z - ie.gateZ)).toFixed(1), +nA.x.toFixed(2), +nA.skiX.toFixed(2), +nA.vx.toFixed(1), AP.phase[0], AP.hold, +nA.edgeCmd.toFixed(2), +Math.max(-1.29, Math.min(1.29, nA.lean * 0.82 + nA.lay)).toFixed(2), +(nA.want || 0).toFixed(1), +nA.accelLat.toFixed(1), +nA.cast.toFixed(2), +nA.reach.toFixed(2), nA.slack ? +(1 + nA.loose).toFixed(2) : 0, +(nA.speed * 3.6).toFixed(0), Math.round(nA.tension), +(nA.drag / xe.mass).toFixed(1), +nA.sink.toFixed(2)]), Fg($n), HA.next >= 1 && HA.next <= 6 && (cN++, nA.loose > 0.03 && (sN++, (gap = Math.max(gap, nA.loose))), (vmin = Math.min(vmin, nA.speed)), (vmax = Math.max(vmax, nA.speed)), (tMax = Math.max(tMax, nA.tension))), (wide = Math.max(wide, Math.abs(nA.skiX))), (reach = Math.max(reach, nA.reach)), (comWide = Math.max(comWide, Math.abs(nA.x))));
   clearTimeout(bo);
   return { status: HA.status, buoys: HA.buoys, msg: HA.messages[0] || nA.fallReason || "", t: +(n / 240).toFixed(1), wide: +wide.toFixed(2), com: +comWide.toFixed(2), reach: +reach.toFixed(2), slack: Math.round((100 * sN) / Math.max(1, cN)), gap: +gap.toFixed(2), v: [Math.round(vmin * 3.6), Math.round(vmax * 3.6)], T: Math.round(tMax), clear: HA.results.map((r) => +r.clearance.toFixed(2)) };
+};
+// ---- ski setup test rig --------------------------------------------------------------------
+// __ski(set): apply a setup ({len, depth, length, dft, wing, bind}; anything left out is stock)
+// and return the ratios it produces.
+window.__mode = (exp) => (exp === void 0 || SETUP.setMode(!!exp), xe.exp ? "default" : "legacy");
+window.__SKI = SKI; // stock, click sizes and the per-click weights, for tuning from the console
+window.__ski = (set) => {
+  let r = skiRide(set),
+    _ = SETUP.render(),
+    f = (v) => +v.toFixed(3);
+  return { set: SKI.set, hold: f(r.hold), lever: f(r.lever), tip: f(r.tip), area: f(r.area), tail: f(r.hold * r.lever), balance: f(r.tip / (r.hold * r.lever)) };
+};
+// a whole autopilot pass on a setup (the skier adapts its timing to the ski)
+window.__setupPass = (set, speed = 58, rope = 13, dir = 1) => {
+  let keep = SKI.set;
+  skiRide(set);
+  let r = window.__simPass(dir, speed, rope);
+  skiRide(keep);
+  return r;
+};
+// __rig(set): the same skier, input for input, on a different ski. The autopilot's inputs on
+// the stock ski are recorded once and played back blind. The run-up is on the stock ski, so
+// the skier reaches the entry gate in exactly the same place at the same speed; the setup is
+// swapped in at the gate, and what comes back, round buoy 1 and across to buoy 2, is what the
+// ski alone changed.
+window.__rig = (set, speed = 58, rope = 13, dir = 1) => {
+  let key = [speed, rope, dir].join("/"),
+    keep = SKI.set;
+  if (!REPLAY.cache[key]) {
+    (skiRide(), (REPLAY.rec = []));
+    let base = window.__simPass(dir, speed, rope);
+    ((REPLAY.cache[key] = REPLAY.rec), (REPLAY.rec = null), (REPLAY.cache[key].base = base));
+  }
+  let u = REPLAY.cache[key];
+  (skiRide(), clearTimeout(bo), (H.speed = speed), (H.rope = rope), xo(dir));
+  let gateZ = dir > 0 ? ie.gateZ : ie.exitZ,
+    b1 = HA.order[0],
+    P1 = ze.firstBuoy,
+    P2 = ze.firstBuoy + ze.spacing,
+    // gain: km/h picked up in the first 0.3 s of the pull after the gate (every setup starts it
+    // from the same state). keep: km/h lost in the second after the edge change.
+    o = { gain: 0, keep: 0, vPeak: 0, v1: 0, c1: 0, apex: 0, apexAt: 0, vMin: 99, rate: 0, smear: 0, loose: 0, T: 0, cl: 0, vCl: 0, v2: 0, c2: 0 },
+    pp = -1e9,
+    iGate = -1,
+    iEdge = -1,
+    vGate = 0,
+    vEdge = 0,
+    crossed = !1,
+    kmh = (v) => v * 3.6;
+  for (let i = 0; i < u.length && !nA.fallen; i++) {
+    (nA.step($n, u[i]), we.step($n, nA.tension * (nA.tensionDir ? nA.tensionDir.z * nA.dir : 0)));
+    let p = -dir * (nA.z - gateZ),
+      sx = b1.side * nA.skiX;
+    if (p > P2 + 0.5) break;
+    pp < 0 && p >= 0 && (skiRide(set), (iGate = i), (vGate = nA.speed));
+    iGate >= 0 && i === iGate + 72 && (o.gain = kmh(nA.speed - vGate));
+    iGate >= 0 && iEdge < 0 && i > iGate + 20 && u[i] * u[iGate] < 0 && ((iEdge = i), (vEdge = nA.speed));
+    iEdge >= 0 && i === iEdge + 240 && (o.keep = kmh(nA.speed - vEdge));
+    p >= 0 && p <= P1 && (o.vPeak = Math.max(o.vPeak, kmh(nA.speed)));
+    pp < P1 && p >= P1 && ((o.v1 = kmh(nA.speed)), (o.c1 = sx - ze.buoyOffset));
+    p > 10 && !crossed && sx > o.apex && ((o.apex = sx), (o.apexAt = p - P1));
+    if (p > 15 && p < P2) {
+      ((o.vMin = Math.min(o.vMin, kmh(nA.speed))), (o.smear = Math.max(o.smear, nA.smear * 57.3)));
+      crossed || (o.rate = Math.max(o.rate, Math.abs(nA.omega) * 57.3));
+    }
+    if (p > P1 && !crossed) {
+      ((o.loose = Math.max(o.loose, nA.loose)), (o.T = Math.max(o.T, nA.tension)));
+      sx < 0 && ((crossed = !0), (o.cl = p - P1), (o.vCl = kmh(nA.speed)));
+    }
+    pp < P2 && p >= P2 && ((o.v2 = kmh(nA.speed)), (o.c2 = -sx - ze.buoyOffset));
+    pp = p;
+  }
+  for (let k in o) o[k] = +o[k].toFixed(k === "T" || k === "rate" ? 0 : k[0] === "v" || k === "smear" ? 1 : 2);
+  (nA.fallen && (o.fell = nA.fallReason), skiRide(keep));
+  return o;
 };
 window.__noFail = () => {
   HA.update = () => null;
