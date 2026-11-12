@@ -7475,13 +7475,19 @@ function gfxBuildNautique() {
 ht.add(gfxBuildNautique());
 
 
-// ---- 45_firstperson.js ----
+// ---- 44_body.js ----
 // =============================================================================
-// First-person gear: sleeves, gloved hands, handle with bridle, D3 NEO III ski
-// (grip for a right-foot-forward skier: left palm up, right palm down)
+// The skier's body and bindings: one athletic adult in a slalom stance.
+// Impact vest, boardshorts, bare arms and legs, short hair, sunglasses; front foot in a
+// high-wrap boot, rear foot in a toe piece with the heel free (right foot forward).
+// Everything is lofted from cross-sections, so limbs have muscle and bone, not tubes.
 // =============================================================================
 // low-poly sphere with smooth normals
 GeoB_.prototype.ball = function (c, r, col, seg = 8, rings = 5) {
+  this.ell(c, [r, r, r], col, seg, rings);
+};
+// ellipsoid with radii r = [rx, ry, rz]
+GeoB_.prototype.ell = function (c, r, col, seg = 10, rings = 6) {
   let base = this.p.length / 3;
   for (let j = 0; j <= rings; j++) {
     let th = (j / rings) * Math.PI,
@@ -7489,8 +7495,8 @@ GeoB_.prototype.ball = function (c, r, col, seg = 8, rings = 5) {
       s = Math.sin(th);
     for (let i = 0; i <= seg; i++) {
       let ph = (i / seg) * 6.2831853,
-        n = [s * Math.cos(ph), y, s * Math.sin(ph)];
-      this.vert([c[0] + n[0] * r, c[1] + n[1] * r, c[2] + n[2] * r], n, i / seg, j / rings, col);
+        d = [s * Math.cos(ph), y, s * Math.sin(ph)];
+      this.vert([c[0] + d[0] * r[0], c[1] + d[1] * r[1], c[2] + d[2] * r[2]], gfxNorm3(d[0] / r[0], d[1] / r[1], d[2] / r[2]), i / seg, j / rings, col);
     }
   }
   for (let j = 0; j < rings; j++)
@@ -7500,10 +7506,707 @@ GeoB_.prototype.ball = function (c, r, col, seg = 8, rings = 5) {
       this.i.push(a, a + 1, b, a + 1, b + 1, b);
     }
 };
-// a chain of tapered tubes with ball joints (fingers, thumbs)
+// a chain of tapered tubes with ball joints (fingers, thumbs, toes)
 GeoB_.prototype.chain = function (pts, radii, col, seg = 8) {
   for (let k = 0; k < pts.length - 1; k++) (this.cyl(pts[k], pts[k + 1], radii[k], radii[k + 1], seg, col, !1), this.ball(pts[k + 1], radii[k + 1], col, seg, 4));
 };
+// Skin a stack of closed rings (each the same number of points) with smooth normals.
+// col: a colour or (ring, point, position) -> colour. o.v: v per ring; o.uFlip: run u the
+// other way round (so artwork is not mirrored); o.cap0 / o.cap1: close the ends.
+GeoB_.prototype.loft = function (rings, col, o = {}) {
+  let M = rings.length,
+    N = rings[0].length,
+    acc = rings.map((r) => r.map(() => [0, 0, 0])),
+    cen = rings.map((r) => {
+      let c = [0, 0, 0];
+      for (let p of r) ((c[0] += p[0] / N), (c[1] += p[1] / N), (c[2] += p[2] / N));
+      return c;
+    });
+  for (let j = 0; j < M - 1; j++)
+    for (let k = 0; k < N; k++) {
+      let k1 = (k + 1) % N,
+        a = rings[j][k],
+        b = rings[j][k1],
+        c = rings[j + 1][k],
+        d = rings[j + 1][k1],
+        ux = d[0] - a[0],
+        uy = d[1] - a[1],
+        uz = d[2] - a[2],
+        vx = c[0] - b[0],
+        vy = c[1] - b[1],
+        vz = c[2] - b[2],
+        n = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+      for (let t of [acc[j][k], acc[j][k1], acc[j + 1][k], acc[j + 1][k1]]) ((t[0] += n[0]), (t[1] += n[1]), (t[2] += n[2]));
+    }
+  let out = 0;
+  for (let j = 0; j < M; j++)
+    for (let k = 0; k < N; k++) {
+      let p = rings[j][k],
+        n = acc[j][k];
+      out += n[0] * (p[0] - cen[j][0]) + n[1] * (p[1] - cen[j][1]) + n[2] * (p[2] - cen[j][2]);
+    }
+  let sg = out < 0 ? -1 : 1,
+    base = this.p.length / 3,
+    fn = typeof col === "function";
+  for (let j = 0; j < M; j++) {
+    // o.arcU: u follows distance round the ring, so artwork keeps its proportions on
+    // sections that are far from round
+    let cum = [0];
+    for (let k = 0; k < N; k++) {
+      let a = rings[j][k],
+        b = rings[j][(k + 1) % N];
+      cum.push(cum[k] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]));
+    }
+    for (let k = 0; k <= N; k++) {
+      let kk = k % N,
+        n = acc[j][kk],
+        u = o.arcU ? cum[k] / (cum[N] || 1) : k / N;
+      this.vert(rings[j][kk], gfxNorm3(n[0] * sg, n[1] * sg, n[2] * sg), o.uFlip ? 1 - u : u, o.v ? o.v[j] : j / (M - 1), fn ? col(j, kk, rings[j][kk]) : col);
+    }
+  }
+  for (let j = 0; j < M - 1; j++)
+    for (let k = 0; k < N; k++) {
+      let a = base + j * (N + 1) + k,
+        c = a + N + 1;
+      this.i.push(a, c, a + 1, a + 1, c, c + 1);
+    }
+  for (let [on, j, j2] of [
+    [o.cap0, 0, 1],
+    [o.cap1, M - 1, M - 2],
+  ]) {
+    if (!on) continue;
+    let nn = gfxNorm3(cen[j][0] - cen[j2][0], cen[j][1] - cen[j2][1], cen[j][2] - cen[j2][2]),
+      cc = fn ? col(j, 0, cen[j]) : col,
+      i0 = this.vert(cen[j], nn, 0.5, o.v ? o.v[j] : j / (M - 1), on === !0 ? cc : on);
+    for (let k = 0; k < N; k++) {
+      let a = this.vert(rings[j][k], nn, 0.5, 0, on === !0 ? cc : on),
+        b = this.vert(rings[j][(k + 1) % N], nn, 0.5, 0, on === !0 ? cc : on);
+      this.i.push(i0, a, b);
+    }
+  }
+};
+
+var BODY = (() => {
+  let V = {
+      sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+      add: (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k],
+      dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+      cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+      len: (a) => Math.hypot(a[0], a[1], a[2]),
+      norm: (a) => gfxNorm3(a[0], a[1], a[2]),
+    },
+    hex = (h) => new Color_(h),
+    mix = (a, b, t) => a.clone().lerp(b, Math.max(0, Math.min(1, t))),
+    sm = (t) => {
+      t = Math.max(0, Math.min(1, t));
+      return t * t * (3 - 2 * t);
+    },
+    SKIN = hex(0xbd8b70),
+    SKIN_D = hex(0xa2715c), // knees, elbows, knuckles, heels
+    SKIN_L = hex(0xc99a80),
+    HAIR = hex(0x2a2019),
+    LIP = hex(0xa9645a),
+    SHORTS = hex(0x23262b),
+    SHORTS_D = hex(0x191b1f),
+    BOOT = hex(0x111113),
+    PLATE = hex(0x0d0e10),
+    STEEL = hex(0x8d9298),
+    WHITE = new Color_().setRGB(1, 1, 1),
+    // lengths of the person (about 1.80 m)
+    K = {
+      hipY: 0.86, // hip joints above the ski's base line, knees bent
+      hipX: 0.085,
+      hipZ: 0.13,
+      trunk: 0.48, // hip line to shoulder line
+      chestZ: 0.07,
+      thigh: 0.44,
+      shank: 0.42,
+      foot: 0.265,
+      sole: 0.04, // top of the footbed above the ski's base line
+      frontHeel: 0.03, // z of the back of the front heel (tip is at -z)
+      rearHeel: 0.325,
+    };
+
+  // closed ring round centre c in the plane of X and Z: half-width rx, extent rzN toward -Z and
+  // rzP toward +Z, superellipse exponent p (1 = ellipse, smaller = squarer)
+  function ring(c, X, Z, N, rx, rzN, rzP, p = 1) {
+    let pts = [];
+    for (let k = 0; k < N; k++) {
+      let ph = (k / N) * 6.2831853,
+        cs = Math.cos(ph),
+        sn = Math.sin(ph),
+        x = rx * Math.sign(cs) * Math.pow(Math.abs(cs), p),
+        z = (sn < 0 ? rzN : rzP) * Math.sign(sn) * Math.pow(Math.abs(sn), p);
+      pts.push([c[0] + X[0] * x + Z[0] * z, c[1] + X[1] * x + Z[1] * z, c[2] + X[2] * x + Z[2] * z]);
+    }
+    return pts;
+  }
+  // smooth a list of [t, ...values] stations into n evenly spaced ones (Catmull-Rom)
+  function resample(st, n) {
+    let out = [],
+      t0 = st[0][0],
+      t1 = st[st.length - 1][0];
+    for (let q = 0; q <= n; q++) {
+      let t = t0 + ((t1 - t0) * q) / n,
+        k = 0;
+      while (k < st.length - 2 && st[k + 1][0] < t) k++;
+      let a = st[Math.max(0, k - 1)],
+        b = st[k],
+        c = st[k + 1],
+        d = st[Math.min(st.length - 1, k + 2)],
+        u = (t - b[0]) / (c[0] - b[0] || 1),
+        row = [t];
+      for (let m = 1; m < b.length; m++) {
+        let v = 0.5 * (2 * b[m] + (c[m] - a[m]) * u + (2 * a[m] - 5 * b[m] + 4 * c[m] - d[m]) * u * u + (3 * b[m] - a[m] - 3 * c[m] + d[m]) * u * u * u);
+        let lo = Math.min(b[m], c[m]);
+        row.push(Math.max(lo > 0 ? lo * 0.9 : lo - 0.003, v));
+      }
+      out.push(row);
+    }
+    return out;
+  }
+  // rings of a limb from a to b. st rows: [t, half-width, front depth, back depth]; fwd = which
+  // way the limb's front faces
+  function limbRings(a, b, fwd, st, N, n = 14) {
+    let Y = V.sub(b, a),
+      y = V.norm(Y),
+      Z = V.norm(V.add(fwd, y, -V.dot(fwd, y))).map((v) => -v),
+      X = V.cross(Z, y),
+      rs = resample(st, n);
+    return { rings: rs.map((s) => ring(V.add(a, Y, s[0]), X, Z, N, s[1], s[2], s[3])), ts: rs.map((s) => s[0]), X, Z, y };
+  }
+  // knee (or elbow) position: l1 from a, l2 from b, bending toward dir
+  function ik(a, b, l1, l2, dir) {
+    let d = V.sub(b, a),
+      D = Math.min(V.len(d), l1 + l2 - 1e-3),
+      u = V.norm(d),
+      ca = (l1 * l1 + D * D - l2 * l2) / (2 * l1 * D),
+      sa = Math.sqrt(Math.max(0, 1 - ca * ca)),
+      w = V.norm(V.add(dir, u, -V.dot(dir, u)));
+    return V.add(V.add(a, u, l1 * ca), w, l1 * sa);
+  }
+
+  // ---- arms: unit-length limbs along +y, scaled to the bone at run time -------------------------
+  function armGeo(st, jointR) {
+    let b = new GeoB_(),
+      L = limbRings([0, 0, 0], [0, 1, 0], [0, 0, -1], st, 16, 12);
+    b.loft(L.rings, (j) => mix(SKIN, SKIN_D, 0.5 * sm(1 - Math.min(L.ts[j], 1 - L.ts[j]) / 0.12)));
+    b.ball([0, 0, 0], jointR, mix(SKIN, SKIN_D, 0.35), 14, 8);
+    return b.build();
+  }
+  let upperGeo = armGeo(
+      [
+        [0, 0.054, 0.054, 0.054],
+        [0.16, 0.056, 0.057, 0.056],
+        [0.42, 0.051, 0.054, 0.052],
+        [0.76, 0.042, 0.043, 0.043],
+        [1, 0.039, 0.04, 0.04],
+      ],
+      0.053,
+    ),
+    foreGeo = armGeo(
+      [
+        [0, 0.04, 0.04, 0.04],
+        [0.2, 0.046, 0.047, 0.046],
+        [0.5, 0.039, 0.04, 0.039],
+        [0.82, 0.029, 0.027, 0.027],
+        [1, 0.027, 0.025, 0.025],
+      ],
+      0.04,
+    ),
+    shoulderGeo = (() => {
+      let b = new GeoB_();
+      b.ell([0, -0.01, 0], [0.058, 0.064, 0.062], SKIN, 16, 10);
+      return b.build();
+    })();
+
+  // ---- trunk: unit height from the hip line (y = 0) to the shoulder line (y = 1) ---------------
+  // x to the skier's right, -z the chest. Rows: [metres above hips, half-width, front, back]
+  let Y0 = -0.1,
+    Y1 = 0.62,
+    VEST0 = 0.15, // bottom edge of the vest
+    neckline = (u) => {
+      // top edge of the vest, metres above the hips: scooped at the front, higher at the back,
+      // running up over the shoulders at the sides (u: 0.25 front, 0.75 back)
+      let front = Math.abs(u - 0.25),
+        back = Math.abs(u - 0.75);
+      return front < 0.25 ? 0.445 + 0.115 * sm(front / 0.16) : 0.515 + 0.045 * sm(back / 0.16);
+    };
+  function torsoTex() {
+    let W = 1024,
+      H = 1024,
+      [c, g] = gfxCanvas(W, H),
+      X = (u) => u * W,
+      Yp = (m) => (1 - (m - Y0) / (Y1 - Y0)) * H,
+      band = (m0, m1, col, u0 = 0, u1 = 1) => ((g.fillStyle = col), g.fillRect(X(u0), Yp(m1), X(u1) - X(u0), Yp(m0) - Yp(m1)));
+    ((g.fillStyle = "#bd8b70"), g.fillRect(0, 0, W, H));
+    // boardshorts
+    band(Y0, 0.17, "#23262b");
+    for (let k = 0; k < 2600; k++) ((g.fillStyle = k % 2 ? "rgba(255,255,255,0.025)" : "rgba(0,0,0,0.06)"), g.fillRect(Math.random() * W, Yp(0.17) + Math.random() * (H - Yp(0.17)), 3, 1));
+    band(0.128, 0.17, "#17191c");
+    for (let u of [0, 0.5, 1]) band(Y0, 0.128, "#3a3f47", u - 0.004, u + 0.004);
+    // vest body
+    g.fillStyle = "#16233b";
+    g.beginPath();
+    g.moveTo(0, Yp(VEST0));
+    for (let k = 0; k <= 256; k++) g.lineTo(X(k / 256), Yp(neckline(k / 256)));
+    (g.lineTo(W, Yp(VEST0)), g.closePath(), g.fill());
+    (g.save(), g.clip()); // everything printed on the vest stays on the vest
+    // black stretch panels down the sides
+    for (let u of [0, 0.5, 1]) band(VEST0, 0.43, "#0e1013", u - 0.062, u + 0.062);
+    // quilted foam: seams across and down the front and back panels
+    ((g.strokeStyle = "rgba(4,6,10,0.75)"), (g.lineWidth = 3));
+    for (let [u0, u1] of [
+      [0.07, 0.43],
+      [0.57, 0.93],
+    ]) {
+      for (let m = VEST0 + 0.05; m < 0.5; m += 0.052) (g.beginPath(), g.moveTo(X(u0), Yp(m)), g.lineTo(X(u1), Yp(m)), g.stroke());
+      for (let f of [0.27, 0.73]) (g.beginPath(), g.moveTo(X(u0 + (u1 - u0) * f), Yp(VEST0)), g.lineTo(X(u0 + (u1 - u0) * f), Yp(0.56)), g.stroke());
+    }
+    ((g.strokeStyle = "rgba(120,140,175,0.16)"), (g.lineWidth = 1.5));
+    for (let [u0, u1] of [
+      [0.07, 0.43],
+      [0.57, 0.93],
+    ])
+      for (let m = VEST0 + 0.05; m < 0.5; m += 0.052) (g.beginPath(), g.moveTo(X(u0), Yp(m) + 3), g.lineTo(X(u1), Yp(m) + 3), g.stroke());
+    // zip
+    band(VEST0, 0.45, "#08090b", 0.25 - 0.007, 0.25 + 0.007);
+    g.fillStyle = "#70767e";
+    for (let y = Yp(0.45); y < Yp(VEST0); y += 6) g.fillRect(X(0.25) - 3, y, 6, 3);
+    ((g.fillStyle = "#b9bec5"), g.fillRect(X(0.25) - 7, Yp(0.45), 14, 26));
+    // two buckle straps round the front
+    for (let m of [0.215, 0.335]) {
+      band(m - 0.014, m + 0.014, "#09090b", 0.045, 0.455);
+      ((g.fillStyle = "#1c1e22"), g.fillRect(X(0.25) - 34, Yp(m + 0.02), 68, Yp(m - 0.02) - Yp(m + 0.02)));
+      ((g.fillStyle = "#3b3f46"), g.fillRect(X(0.25) - 26, Yp(m + 0.012), 52, 4));
+    }
+    g.restore();
+    // binding tape along the edges
+    ((g.strokeStyle = "#31415f"), (g.lineWidth = 7), g.beginPath());
+    for (let k = 0; k <= 256; k++) g[k ? "lineTo" : "moveTo"](X(k / 256), Yp(neckline(k / 256)) + 3);
+    g.stroke();
+    band(VEST0, VEST0 + 0.008, "#31415f");
+    // marks: small on the chest, large across the shoulder blades
+    ((g.fillStyle = "#e9ebee"), (g.textAlign = "center"), (g.textBaseline = "middle"));
+    ((g.font = "italic 900 30px 'Arial Black', Arial, sans-serif"), g.fillText("259", X(0.325), Yp(0.405)));
+    ((g.font = "italic 900 74px 'Arial Black', Arial, sans-serif"), g.fillText("SLALOM", X(0.75), Yp(0.43)));
+    ((g.font = "italic 900 54px 'Arial Black', Arial, sans-serif"), (g.fillStyle = "#6fa8ff"), g.fillText("259", X(0.75), Yp(0.365)));
+    let t = new CanvasTex_(c);
+    ((t.colorSpace = K_.SRGB), (t.anisotropy = 8), (t.wrapS = K_.Repeat));
+    return t;
+  }
+  function torsoGeo() {
+    let b = new GeoB_(),
+      N = 28,
+      body = resample(
+        [
+          [-0.1, 0.07, 0.055, 0.06],
+          [-0.05, 0.135, 0.085, 0.1],
+          [0, 0.166, 0.098, 0.118],
+          [0.09, 0.162, 0.1, 0.108],
+          [0.2, 0.142, 0.096, 0.09],
+          [0.3, 0.16, 0.108, 0.1],
+          [0.4, 0.188, 0.121, 0.11],
+          [0.47, 0.198, 0.114, 0.114],
+          [0.52, 0.186, 0.092, 0.102],
+          [0.555, 0.118, 0.066, 0.084],
+          [0.585, 0.068, 0.057, 0.064],
+          [0.62, 0.058, 0.053, 0.06],
+        ],
+        26,
+      ),
+      rings = [],
+      vs = [];
+    for (let s of body) {
+      let m = s[0],
+        // the vest stands a centimetre proud of the body, with a lip at its lower edge
+        thick = 0.013 * sm((m - VEST0) / 0.012) * (1 - sm((m - 0.54) / 0.03));
+      rings.push(ring([0, m / K.trunk, 0], [1, 0, 0], [0, 0, 1], N, s[1] + thick, s[2] + thick, s[3] + thick, 0.9));
+      vs.push((m - Y0) / (Y1 - Y0));
+    }
+    b.loft(rings, WHITE, { v: vs, uFlip: !0, cap0: SHORTS_D });
+    return b.build();
+  }
+
+  // ---- head: eyes at the origin, facing -z -------------------------------------------------------
+  function hairTex() {
+    // strands running from the crown down
+    let [c, g] = gfxCanvas(256, 64);
+    ((g.fillStyle = "#33261c"), g.fillRect(0, 0, 256, 64));
+    for (let k = 0; k < 420; k++) {
+      let x = Math.random() * 256,
+        w = 0.6 + Math.random() * 1.8;
+      ((g.fillStyle = Math.random() < 0.5 ? "rgba(98,74,52,0.5)" : "rgba(12,8,6,0.55)"), g.fillRect(x, 0, w, 64));
+    }
+    let t = new CanvasTex_(c);
+    ((t.colorSpace = K_.SRGB), (t.wrapS = t.wrapT = K_.Repeat), (t.anisotropy = 4));
+    return t;
+  }
+  function headGroup(skinMat, addMesh) {
+    let g = new Group_(),
+      b = new GeoB_(),
+      N = 30,
+      // [height, half-width, front, back, centre z]
+      lv = resample(
+        [
+          [-0.127, 0.012, 0.014, 0.014, -0.05],
+          [-0.118, 0.03, 0.036, 0.03, -0.04],
+          [-0.098, 0.05, 0.056, 0.046, -0.022],
+          [-0.072, 0.06, 0.07, 0.06, -0.007],
+          [-0.045, 0.066, 0.077, 0.076, 0],
+          [-0.02, 0.071, 0.079, 0.089, 0],
+          [0.0, 0.0725, 0.077, 0.096, 0],
+          [0.025, 0.0735, 0.082, 0.099, 0],
+          [0.055, 0.072, 0.079, 0.098, 0],
+          [0.085, 0.066, 0.067, 0.091, 0.002],
+          [0.108, 0.052, 0.049, 0.073, 0.005],
+          [0.122, 0.03, 0.027, 0.045, 0.008],
+          [0.129, 0.006, 0.006, 0.008, 0.01],
+        ],
+        30,
+      ),
+      // lowest point of the hair at each angle round the head (0 = front, 0.5 = back)
+      hairline = (a) => (a < 0.16 ? 0.068 - 0.03 * sm(a / 0.16) : a < 0.3 ? 0.038 - 0.07 * sm((a - 0.16) / 0.14) : -0.032 - 0.05 * sm((a - 0.3) / 0.2)),
+      ang = (k) => Math.acos(Math.max(-1, Math.min(1, -Math.sin((k / N) * 6.2831853)))) / 6.2831853, // 0 = front, 0.5 = back
+      rnd = (a, c) => {
+        let v = Math.sin(a * 127.1 + c * 311.7) * 43758.5453;
+        return v - Math.floor(v);
+      },
+      rings = lv.map((s) => ring([0, s[0], s[4]], [1, 0, 0], [0, 0, 1], N, s[1], s[2], s[3], 0.86).map((p, k) => Object.assign(p, { hair: sm((s[0] - hairline(ang(k))) / 0.014) })));
+    // skin, shaded a little under the jaw and darker where the scalp is covered
+    b.loft(rings, (j, k, p) => mix(mix(SKIN, SKIN_D, 0.5 * sm((-0.085 - p[1]) / 0.03)), HAIR, p.hair * 0.85), { cap0: SKIN_D, cap1: HAIR });
+    // hair: its own surface standing off the scalp, tucked under the skin below the hairline so
+    // its edge is where the two meet. Uneven, a touch fuller on top and at the front.
+    let hb = new GeoB_(),
+      hl = lv.filter((s) => s[0] > -0.095),
+      hr = hl.map((s, j) =>
+        ring([0, s[0], s[4]], [1, 0, 0], [0, 0, 1], N, s[1], s[2], s[3], 0.86).map((p, k) => {
+          let a = ang(k),
+            h = sm((s[0] - hairline(a)) / 0.012),
+            d = gfxNorm3(p[0], 0, p[2] - s[4]),
+            top = sm((s[0] - 0.05) / 0.07),
+            lift = -0.007 + h * (0.014 + 0.006 * top + 0.004 * rnd(k, j) + 0.005 * sm(1 - a / 0.12) * top);
+          return [p[0] + d[0] * lift, p[1] + (0.006 * top + 0.003 * rnd(j, k)) * h, p[2] + d[2] * lift];
+        }),
+      );
+    hb.loft(hr, WHITE, { cap1: WHITE });
+    addMesh(hb.build(), gfxNoFlip(new StdMat_({ map: hairTex(), vertexColors: !0, roughness: 0.82, metalness: 0, side: K_.Double })), g);
+    // neck, set toward the back of the skull
+    b.loft(
+      [
+        ring([0, -0.235, 0.04], [1, 0, 0], [0, 0, 1], 18, 0.066, 0.06, 0.064),
+        ring([0, -0.17, 0.032], [1, 0, 0], [0, 0, 1], 18, 0.059, 0.054, 0.059),
+        ring([0, -0.1, 0.022], [1, 0, 0], [0, 0, 1], 18, 0.057, 0.051, 0.058),
+        ring([0, -0.06, 0.02], [1, 0, 0], [0, 0, 1], 18, 0.054, 0.046, 0.057),
+      ],
+      SKIN,
+    );
+    // nose, ears, lips, chin
+    b.chain(
+      [
+        [0, 0.004, -0.076],
+        [0, -0.022, -0.09],
+        [0, -0.04, -0.099],
+      ],
+      [0.009, 0.0105, 0.0125],
+      SKIN_L,
+      10,
+    );
+    for (let s of [-1, 1]) (b.ell([s * 0.0115, -0.046, -0.087], [0.008, 0.0065, 0.009], SKIN, 8, 5), b.ell([s * 0.0745, -0.014, 0.016], [0.0075, 0.03, 0.017], mix(SKIN, SKIN_D, 0.35), 10, 6));
+    b.ell([0, -0.073, -0.0745], [0.024, 0.0062, 0.007], LIP, 12, 5);
+    // brows, just showing over the sunglasses
+    for (let s of [-1, 1]) b.ell([s * 0.032, 0.031, -0.0765], [0.02, 0.0042, 0.006], mix(SKIN, HAIR, 0.8), 10, 4);
+    b.ell([0, -0.108, -0.064], [0.022, 0.016, 0.016], SKIN, 10, 6);
+    addMesh(b.build(), skinMat, g);
+    // wrap-around sunglasses: two lenses, a bridge, arms back to the ears
+    let s = new GeoB_(),
+      f = new GeoB_(),
+      FR = hex(0x0b0b0d),
+      at = (a, y, off) => [Math.sin(a) * (0.0735 + off), y, -Math.cos(a) * (0.079 + off) * (1 - 0.1 * Math.abs(Math.sin(a)))];
+    for (let sd of [-1, 1]) {
+      let prev = null;
+      for (let q = 0; q <= 10; q++) {
+        let t = q / 10,
+          a = sd * (0.13 + 1.0 * t),
+          // each lens: square-ish at the nose, deepest under the eye, sweeping up to the temple
+          up = 0.017 - 0.004 * t * t,
+          dn = 0.012 + 0.012 * Math.sin(Math.PI * Math.min(1, t * 1.25)) * (1 - 0.35 * t),
+          top = at(a, 0.006 + up, 0.0095),
+          bot = at(a, 0.006 - dn, 0.0085),
+          nn = gfxNorm3(Math.sin(a), 0.05, -Math.cos(a));
+        prev && s.quad(prev[0], top, bot, prev[1], WHITE, null, nn);
+        prev && f.cyl(prev[0], top, 0.0028, 0.0028, 5, FR, !1);
+        prev = [top, bot];
+      }
+      f.cyl(at(sd * 1.13, 0.02, 0.0095), [sd * 0.078, 0.01, 0.018], 0.0032, 0.0028, 6, FR, !0);
+    }
+    f.cyl(at(-0.13, 0.019, 0.0095), at(0.13, 0.019, 0.0095), 0.0032, 0.0032, 6, FR, !0);
+    addMesh(f.build(), skinMat, g);
+    addMesh(s.build(), gfxNoFlip(new PhysMat_({ color: 0x050608, roughness: 0.3, metalness: 0.1, clearcoat: 0.6, clearcoatRoughness: 0.15, envMapIntensity: 0.45, side: K_.Double })), g);
+    return g;
+  }
+
+  // ---- feet ------------------------------------------------------------------------------------
+  // [fraction of foot length from the heel, half-width, height]
+  let FOOT = [
+    [0, 0.018, 0.045],
+    [0.05, 0.029, 0.07],
+    [0.14, 0.033, 0.086],
+    [0.3, 0.034, 0.088],
+    [0.48, 0.041, 0.064],
+    [0.68, 0.049, 0.041],
+    [0.82, 0.048, 0.028],
+  ];
+  // toes toward -z. heelZ = z of the back of the heel, base = y of the sole
+  function footInto(b, heelZ, base, inner) {
+    let rs = resample(FOOT, 14),
+      rings = rs.map((s) => ring([inner * 0.004 * sm(s[0] / 0.6), base + s[2] / 2, heelZ - s[0] * K.foot], [1, 0, 0], [0, 1, 0], 14, s[1], s[2] / 2, s[2] / 2, 0.78));
+    b.loft(rings, (j) => mix(SKIN_D, SKIN, sm(rs[j][0] / 0.12)), { cap0: SKIN_D, cap1: SKIN });
+    // toes, big toe on the inside
+    let z0 = heelZ - 0.8 * K.foot;
+    for (let k = 0; k < 5; k++) {
+      let x = inner * (0.034 - k * 0.0185) + inner * 0.004,
+        r = k === 0 ? 0.0125 : 0.0098 - k * 0.0006,
+        l = k === 0 ? 0.05 : 0.046 - k * 0.006;
+      b.chain(
+        [
+          [x, base + 0.016, z0 + 0.008],
+          [x, base + r + 0.002, z0 - l * 0.6],
+          [x, base + r * 0.9, z0 - l],
+        ],
+        [r * 1.05, r, r * 0.86],
+        k === 0 ? SKIN_L : SKIN,
+        8,
+      );
+    }
+    // ankle bones
+    let az = heelZ - 0.25 * K.foot;
+    for (let s of [-1, 1]) b.ell([s * 0.034, base + 0.075 - (s * inner > 0 ? 0 : 0.008), az + 0.004], [0.012, 0.016, 0.016], SKIN, 8, 5);
+    return az;
+  }
+
+  // ---- bindings -----------------------------------------------------------------------------------
+  function bootTex() {
+    // u round the boot (0 and 1 = outer side, 0.25 = sole, 0.5 = inner side, 0.75 = top),
+    // v from the heel (0) to the toe opening (1)
+    let W = 512,
+      H = 512,
+      [c, g] = gfxCanvas(W, H),
+      X = (u) => u * W,
+      Yp = (v) => (1 - v) * H;
+    ((g.fillStyle = "#121214"), g.fillRect(0, 0, W, H));
+    for (let k = 0; k < 5000; k++) ((g.fillStyle = k % 2 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.12)"), g.fillRect(Math.random() * W, Math.random() * H, 2, 2));
+    // mesh tongue under the laces
+    ((g.fillStyle = "#1c1c20"), g.fillRect(X(0.68), Yp(1), X(0.14), Yp(0.4) - Yp(1)));
+    g.fillStyle = "#28282d";
+    for (let y = Yp(1); y < Yp(0.4); y += 5) for (let x = X(0.68) + ((y / 5) % 2) * 2.5; x < X(0.82); x += 5) g.fillRect(x, y, 2, 2);
+    // lace tabs down both edges and the bungee laces crossing between them
+    let n = 7,
+      pts = [];
+    for (let k = 0; k <= n; k++) {
+      let v = 0.43 + (0.54 * k) / n;
+      for (let u of [0.675, 0.825]) ((g.fillStyle = "#070708"), g.fillRect(X(u) - 9, Yp(v) - 6, 18, 12), (g.fillStyle = "#2c2c31"), g.fillRect(X(u) - 9, Yp(v) - 6, 18, 2));
+      pts.push([X(k % 2 ? 0.825 : 0.675), Yp(v)], [X(k % 2 ? 0.675 : 0.825), Yp(v)]);
+    }
+    for (let [col, lw] of [
+      ["#040405", 9],
+      ["#3d3d44", 5],
+      ["#7a7a84", 1.5],
+    ]) {
+      ((g.strokeStyle = col), (g.lineWidth = lw), (g.lineJoin = "round"));
+      for (let off of [0, 1]) {
+        g.beginPath();
+        for (let k = 0; k <= n; k++) {
+          let p = pts[k * 2 + ((k + off) % 2 ? 1 : 0)];
+          g[k ? "lineTo" : "moveTo"](p[0], p[1]);
+        }
+        g.stroke();
+      }
+    }
+    // panel seams with a row of stitching, either side of the laces
+    for (let sd of [-1, 1]) {
+      let u = (d) => X(0.75 + sd * d);
+      ((g.strokeStyle = "rgba(0,0,0,0.85)"), (g.lineWidth = 4), g.beginPath(), g.moveTo(u(0.2), Yp(0.02)), g.bezierCurveTo(u(0.12), Yp(0.3), u(0.13), Yp(0.5), u(0.1), Yp(0.99)), g.stroke());
+      ((g.strokeStyle = "#4a4a52"), (g.lineWidth = 1.5), g.setLineDash([5, 4]), g.beginPath(), g.moveTo(u(0.2) + sd * 7, Yp(0.02)), g.bezierCurveTo(u(0.12) + sd * 7, Yp(0.3), u(0.13) + sd * 7, Yp(0.5), u(0.1) + sd * 7, Yp(0.99)), g.stroke(), g.setLineDash([]));
+    }
+    // wordmark on each side of the ankle (the outer side sits on the u = 0 / 1 seam)
+    ((g.fillStyle = "#eceef0"), (g.font = "italic 900 54px 'Arial Black', Impact, Arial, sans-serif"), (g.textAlign = "center"), (g.textBaseline = "middle"));
+    for (let [uu, rot] of [
+      [0.02, -1],
+      [1.02, -1],
+      [0.48, 1],
+    ])
+      (g.save(), g.translate(X(uu), Yp(0.2)), g.rotate((rot * Math.PI) / 2), g.fillText("D3", 0, 0), g.restore());
+    let t = new CanvasTex_(c);
+    ((t.colorSpace = K_.SRGB), (t.anisotropy = 8), (t.wrapS = K_.Repeat));
+    return t;
+  }
+  function heelTex() {
+    let [c, g] = gfxCanvas(128, 256);
+    ((g.fillStyle = "#060607"), g.fillRect(0, 0, 128, 256), (g.fillStyle = "#f1f2f3"));
+    ((g.font = "italic 900 60px 'Arial Black', Impact, Arial, sans-serif"), (g.textAlign = "center"), (g.textBaseline = "middle"), g.fillText("D3", 64, 92));
+    g.fillRect(34, 130, 60, 5);
+    let t = new CanvasTex_(c);
+    ((t.colorSpace = K_.SRGB), (t.anisotropy = 8));
+    return t;
+  }
+  // black plate bolted to the ski, corners rounded, with its screws
+  function plateInto(b, z0, z1, hw) {
+    let cz = (z0 + z1) / 2,
+      hl = Math.abs(z1 - z0) / 2,
+      r0 = ring([0, 0.0225, cz], [1, 0, 0], [0, 0, 1], 28, hw, hl, hl, 0.32),
+      r1 = ring([0, 0.031, cz], [1, 0, 0], [0, 0, 1], 28, hw - 0.002, hl - 0.002, hl - 0.002, 0.32);
+    b.loft([r0, r1], PLATE, { cap1: PLATE });
+    for (let sx of [-1, 1]) for (let sz of [-1, 1]) b.ell([sx * (hw - 0.014), 0.0315, cz + sz * (hl - 0.016)], [0.0055, 0.002, 0.0055], STEEL, 8, 3);
+  }
+  // [fraction of boot length from the back, half-width, height above the plate]
+  let BOOTP = [
+      [0, 0.02, 0.2],
+      [0.035, 0.038, 0.207],
+      [0.1, 0.05, 0.211],
+      [0.22, 0.0545, 0.213],
+      [0.34, 0.0545, 0.205],
+      [0.41, 0.0545, 0.168],
+      [0.48, 0.0555, 0.124],
+      [0.57, 0.0575, 0.092],
+      [0.67, 0.06, 0.071],
+      [0.77, 0.0602, 0.06],
+      [0.8, 0.0595, 0.056],
+    ],
+    BOOTL = 0.286;
+  function bootInto(b, panel, back, tilt, ankleY) {
+    // the cuff leans forward with the shin
+    let lean = (p) => [p[0], p[1], p[2] + Math.max(0, p[1] - ankleY + 0.025) * tilt],
+      rs = resample(BOOTP, 22),
+      rings = rs.map((s) => ring([0, 0.031 + s[2] / 2, back - s[0] * BOOTL], [1, 0, 0], [0, 1, 0], 22, s[1], s[2] / 2, s[2] / 2, 0.55).map(lean));
+    b.loft(rings, WHITE, { v: rs.map((s) => s[0] / 0.8), uFlip: !0, arcU: !0, cap0: WHITE });
+    // padded collar where the leg goes in
+    let top = 0.031 + 0.211;
+    b.loft(
+      [0.0, 0.012].map((up, q) => ring(lean([0, top - 0.012 + up, back - 0.24 * BOOTL]), [1, 0, 0], [0, 0, -1], 18, 0.057 - q * 0.004, 0.058 - q * 0.004, 0.056 - q * 0.004, 0.8)),
+      hex(0x1b1b1e),
+    );
+    // glossy strip up the back of the heel, and the pull loop above it
+    let prev = null;
+    for (let q = 0; q <= 4; q++) {
+      let a = -0.6 + (1.2 * q) / 4,
+        x = Math.sin(a) * 0.03,
+        zz = back + 0.0035 - (1 - Math.cos(a)) * 0.02,
+        lo = lean([x, 0.075, zz]),
+        hi = lean([x, top - 0.012, zz]);
+      prev && panel.quad(prev[0], lo, hi, prev[1], WHITE, [(q - 1) / 4, 0, q / 4, 1], gfxNorm3(Math.sin(a) * 0.6, 0, 1));
+      prev = [lo, hi];
+    }
+    b.chain([lean([-0.014, top - 0.01, back - 0.004]), lean([-0.012, top + 0.03, back + 0.004]), lean([0.012, top + 0.03, back + 0.004]), lean([0.014, top - 0.01, back - 0.004])], [0.005, 0.005, 0.005, 0.005], hex(0x0a0a0b), 6);
+  }
+  // rear toe piece: a strap over the forefoot, laced on top, heel left free
+  function toePieceInto(b, heelZ, base) {
+    let rs = resample(FOOT, 14).filter((s) => s[0] >= 0.4 && s[0] <= 0.86),
+      rings = rs.map((s) => ring([0, base - 0.008 + (s[2] + 0.02) / 2, heelZ - s[0] * K.foot], [1, 0, 0], [0, 1, 0], 20, s[1] + 0.011, (s[2] + 0.02) / 2, (s[2] + 0.02) / 2, 0.62));
+    b.loft(rings, WHITE, { v: rs.map((s) => 0.45 + ((s[0] - 0.4) / 0.46) * 0.5), uFlip: !0, arcU: !0 });
+    // padded rim at the back edge
+    let s = rs[0];
+    b.loft(
+      [0, 0.012].map((dz, q) => ring([0, base - 0.008 + (s[2] + 0.02) / 2, heelZ - s[0] * K.foot + dz], [1, 0, 0], [0, 1, 0], 20, s[1] + 0.014 - q * 0.004, (s[2] + 0.026) / 2, (s[2] + 0.026) / 2, 0.62)),
+      hex(0x1a1a1d),
+    );
+  }
+
+  // ---- legs, feet and bindings, in the ski's frame ---------------------------------------------
+  function lower(addMesh, skinMat) {
+    let legs = new Group_(),
+      feet = new Group_(),
+      lb = new GeoB_(),
+      fb = new GeoB_(),
+      bb = new GeoB_(),
+      pb = new GeoB_(),
+      hp = new GeoB_(),
+      base = K.sole,
+      sides = [
+        // front leg (right foot forward), then rear
+        { s: 1, heel: K.frontHeel, bend: [0.1, 0, -1], boot: !0 },
+        { s: -1, heel: K.rearHeel, bend: [0.22, 0, -1], boot: !1 },
+      ];
+    for (let q of sides) {
+      let footBase = q.boot ? base : base - 0.004,
+        az = footInto(fb, q.heel, footBase, -q.s),
+        ankle = [0, footBase + 0.078, az],
+        hip = [q.s * K.hipX, K.hipY, K.hipZ],
+        knee = ik(hip, ankle, K.thigh, K.shank, q.bend),
+        fwdT = V.norm(V.cross(V.cross(V.sub(knee, hip), q.bend), V.sub(knee, hip))),
+        thigh = limbRings(
+          hip,
+          knee,
+          fwdT,
+          [
+            [0, 0.086, 0.088, 0.094],
+            [0.25, 0.081, 0.088, 0.086],
+            [0.55, 0.067, 0.074, 0.067],
+            [0.85, 0.054, 0.058, 0.052],
+            [1, 0.05, 0.053, 0.048],
+          ],
+          18,
+          14,
+        ),
+        fwdS = V.norm(V.cross(V.cross(V.sub(ankle, knee), q.bend), V.sub(ankle, knee))),
+        shank = limbRings(
+          knee,
+          ankle,
+          fwdS,
+          [
+            [0, 0.05, 0.051, 0.05],
+            [0.12, 0.048, 0.045, 0.056],
+            [0.33, 0.047, 0.041, 0.064],
+            [0.6, 0.038, 0.036, 0.046],
+            [0.86, 0.03, 0.03, 0.032],
+            [1, 0.031, 0.033, 0.033],
+          ],
+          18,
+          16,
+        );
+      lb.loft(thigh.rings, (j) => mix(SKIN, SKIN_D, 0.55 * sm((thigh.ts[j] - 0.86) / 0.14)));
+      lb.loft(shank.rings, (j) => mix(SKIN, SKIN_D, 0.55 * sm(1 - shank.ts[j] / 0.1)));
+      // knee: the joint itself and the kneecap in front of it
+      lb.ell(knee, [0.05, 0.052, 0.05], mix(SKIN, SKIN_D, 0.55), 14, 8);
+      lb.ell(V.add(knee, V.norm(V.add(fwdT, fwdS)), 0.03), [0.03, 0.036, 0.026], mix(SKIN, SKIN_D, 0.4), 12, 6);
+      // boardshorts: loose round the thigh to just above the knee
+      let st = resample(
+          [
+            [0, 0.095, 0.096, 0.102],
+            [0.25, 0.091, 0.097, 0.096],
+            [0.5, 0.082, 0.089, 0.082],
+            [0.66, 0.077, 0.085, 0.078],
+          ],
+          9,
+        ),
+        Yv = V.sub(knee, hip);
+      lb.loft(
+        st.map((s) => ring(V.add(hip, Yv, s[0]), thigh.X, thigh.Z, 18, s[1], s[2], s[3])),
+        (j) => (j === st.length - 1 ? SHORTS_D : SHORTS),
+      );
+      lb.ell(hip, [0.095, 0.098, 0.102], SHORTS, 14, 8);
+      if (q.boot) {
+        let back = q.heel + 0.012;
+        (plateInto(pb, back + 0.022, back - BOOTL - 0.03, 0.066), bootInto(bb, hp, back, (knee[2] - ankle[2]) / (knee[1] - ankle[1]), ankle[1]));
+      } else (plateInto(pb, q.heel + 0.02, q.heel - K.foot - 0.012, 0.064), toePieceInto(bb, q.heel, footBase));
+    }
+    addMesh(lb.build(), skinMat, legs);
+    addMesh(fb.build(), skinMat, feet);
+    addMesh(pb.build(), gfxNoFlip(new StdMat_({ vertexColors: !0, roughness: 0.55, metalness: 0.2, side: K_.Double })), feet);
+    addMesh(bb.build(), gfxNoFlip(new PhysMat_({ map: bootTex(), vertexColors: !0, roughness: 0.5, metalness: 0, clearcoat: 0.35, clearcoatRoughness: 0.35, side: K_.Double })), feet);
+    addMesh(hp.build(), gfxNoFlip(new PhysMat_({ map: heelTex(), vertexColors: !0, roughness: 0.12, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.06, side: K_.Double })), feet);
+    return { legs, feet };
+  }
+
+  return { K, SKIN, upperGeo, foreGeo, shoulderGeo, torsoGeo, torsoTex, headGroup, lower };
+})();
+
+
+// ---- 45_firstperson.js ----
+// =============================================================================
+// First-person gear: sleeves, gloved hands, handle with bridle, D3 NEO III ski
+// (grip for a right-foot-forward skier: left palm up, right palm down)
+// =============================================================================
 // gear is built from explicit outward normals, so never let double-sided shading flip them
 function gfxNoFlip(m) {
   m.onBeforeCompile = (sh) => {
@@ -7657,17 +8360,23 @@ var GEAR = (() => {
     return t;
   }
   function skiGeo() {
-    let N = 40,
+    // stations along the ski, tip first. The nose is a rounded (elliptical) end over the first
+    // 7.5% of the length: it gets closely spaced stations, stepped evenly round the curve, so
+    // the very tip reads as round instead of the point two straight facets used to make.
+    let ts = [];
+    for (let k = 0; k < 10; k++) ts.push(0.075 * (1 - Math.cos((k / 10) * 1.5708)));
+    for (let k = 0; k <= 37; k++) ts.push(0.075 + (0.925 * k) / 37);
+    let N = ts.length - 1,
       top = new GeoB_(),
       body = new GeoB_(),
       EDGE = new Color_(1052688),
       BASE = new Color_(657930),
       st = [];
     for (let k = 0; k <= N; k++) {
-      let t = k / N,
+      let t = ts[k],
         round = Math.sqrt(Math.max(0, 1 - Math.pow(1 - Math.min(1, t / 0.075), 2))),
         taper = t < 0.32 ? 0.87 + 0.13 * Math.sin(((t - 0.075) / 0.245) * 1.5708) : 1 - 0.4 * Math.pow((t - 0.32) / 0.68, 1.5),
-        w = Math.max(0.002, 0.0855 * round * Math.max(0.8, taper)),
+        w = Math.max(0.0005, 0.0855 * round * Math.max(0.8, taper)),
         y = 0.105 * Math.pow(Math.max(0, 1 - t / 0.2), 2.2) + 0.012 * Math.pow(Math.max(0, (t - 0.8) / 0.2), 2),
         th = 0.007 + 0.016 * Math.pow(Math.sin(Math.min(1, t * 1.05) * Math.PI), 0.6);
       st.push({ t, z: -0.86 + 1.68 * t, w, y, th });
@@ -7703,116 +8412,23 @@ var GEAR = (() => {
   let gGeo = gloveGeo(),
     artGeo = gloveArtGeo(),
     artMat = new StdMat_({ map: gloveArt(), transparent: !0, alphaTest: 0.2, roughness: 0.6, side: K_.Double, polygonOffset: !0, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
-    SLEEVE = new Color_(2171435),
-    PIPING = new Color_(7372944),
-    // unit-length limb along +y: [height fraction, radius] stations, with a contrast band
-    armGeo = (st, band) => {
-      let b = new GeoB_();
-      b.ball([0, 0, 0], st[0][1], SLEEVE, 14, 6);
-      for (let k = 0; k < st.length - 1; k++) b.cyl([0, st[k][0], 0], [0, st[k + 1][0], 0], st[k][1], st[k + 1][1], 16, k === band ? PIPING : SLEEVE, !1);
-      return b.build();
-    },
-    upperGeo = armGeo(
-      [
-        [0, 0.05],
-        [0.35, 0.052],
-        [0.8, 0.044],
-        [1, 0.041],
-      ],
-      -1,
-    ),
-    foreGeo = armGeo(
-      [
-        [0, 0.04],
-        [0.28, 0.043],
-        [0.7, 0.034],
-        [0.86, 0.031],
-        [0.9, 0.0312],
-        [1, 0.03],
-      ],
-      3,
-    ),
-    VEST = new Color_(2569039), // dark navy impact vest: stays quiet at the edge of the view
+    // skin: a soft sheen at grazing angles keeps it from reading as plastic
+    skinMat = gfxNoFlip(new PhysMat_({ vertexColors: !0, roughness: 0.52, metalness: 0, sheen: 0.3, sheenRoughness: 0.6, sheenColor: new Color_(0xd98a68), side: K_.Double })),
+    upperGeo = BODY.upperGeo,
+    foreGeo = BODY.foreGeo,
+    shoulderGeo = BODY.shoulderGeo,
     torso = (() => {
-      // unit-height trunk: hips at y = 0, shoulder line at y = 1, x to the skier's right. Wetsuit
-      // at the waist, impact vest over ribs and shoulders, a short neck. Oval in section, so the
-      // shoulder joints sit inside its outline and the arms can never part from it.
-      let b = new GeoB_(),
-        N = 18,
-        rings = [
-          [-0.14, 0.09, 0.07, SLEEVE],
-          [0, 0.155, 0.108, SLEEVE],
-          [0.26, 0.145, 0.1, SLEEVE],
-          [0.3, 0.162, 0.112, VEST],
-          [0.7, 0.195, 0.125, VEST],
-          [0.93, 0.2, 0.112, VEST],
-          [1.02, 0.15, 0.09, VEST],
-          [1.06, 0.062, 0.062, SLEEVE],
-          [1.2, 0.058, 0.058, SLEEVE],
-        ];
-      for (let [y, a, c, col] of rings)
-        for (let k = 0; k <= N; k++) {
-          let ph = (k / N) * 6.2831853,
-            cs_ = Math.cos(ph),
-            sn = Math.sin(ph);
-          b.vert([a * cs_, y, c * sn], gfxNorm3(cs_ * c, 0, sn * a), k / N, y, col);
-        }
-      for (let j = 0; j < rings.length - 1; j++)
-        for (let k = 0; k < N; k++) {
-          let i0 = j * (N + 1) + k,
-            i1 = i0 + N + 1;
-          b.i.push(i0, i1, i0 + 1, i0 + 1, i1, i1 + 1);
-        }
-      let m = add(b.build(), neoprene, le);
+      // unit-height trunk: hips at y = 0, shoulder line at y = 1, x to the skier's right
+      let m = add(BODY.torsoGeo(), gfxNoFlip(new StdMat_({ map: BODY.torsoTex(), vertexColors: !0, roughness: 0.62, metalness: 0, side: K_.Double })), le);
       m.matrixAutoUpdate = !1;
       return m;
     })(),
-    shoulderGeo = (() => {
-      let b = new GeoB_();
-      b.ball([0, 0, 0], 0.07, VEST, 14, 8);
-      return b.build();
-    })(),
-    legs = (() => {
-      // in the ski's own frame: front (right) leg and rear leg, knees bent
-      let b = new GeoB_();
-      b.chain(
-        [
-          [0.075, 0.8, 0.1],
-          [0.035, 0.43, -0.31],
-          [0.0, 0.15, -0.17],
-        ],
-        [0.084, 0.058, 0.044],
-        SLEEVE,
-        14,
-      );
-      b.chain(
-        [
-          [-0.075, 0.78, 0.16],
-          [-0.025, 0.4, 0.11],
-          [0.0, 0.15, 0.27],
-        ],
-        [0.084, 0.058, 0.044],
-        SLEEVE,
-        14,
-      );
-      (b.ball([0.075, 0.8, 0.1], 0.084, SLEEVE, 12, 6), b.ball([-0.075, 0.78, 0.16], 0.084, SLEEVE, 12, 6));
-      let g = new Group_();
-      add(b.build(), neoprene, g);
-      return g;
-    })(),
+    lower = BODY.lower(add, skinMat),
+    legs = lower.legs,
+    feet = lower.feet,
     head = (() => {
-      // carried upright over the shoulders: skin, short dark hair, sunglasses. Faces -z.
-      let g = new Group_(),
-        b = new GeoB_(),
-        SKIN = new Color_(12812125),
-        HAIR = new Color_(1908001);
-      (b.ball([0, 0, 0], 0.102, SKIN, 16, 10), b.cyl([0, -0.16, 0.01], [0, -0.05, 0.005], 0.05, 0.052, 12, SKIN, !1));
-      (b.ball([0, 0.022, 0.018], 0.106, HAIR, 16, 10), b.ball([0, 0.0, -0.062], 0.058, SKIN, 12, 8));
-      for (let k = -6; k <= 6; k++) {
-        let a = (k / 6) * 1.25;
-        b.ball([Math.sin(a) * 0.098, 0.012, -Math.cos(a) * 0.098], 0.022, BLACK, 8, 5);
-      }
-      add(b.build(), neoprene, g);
+      // carried upright over the shoulders; its origin is the eye line. Faces -z.
+      let g = BODY.headGroup(skinMat, add);
       le.add(g);
       return g;
     })(),
@@ -7823,7 +8439,7 @@ var GEAR = (() => {
       (add(gGeo, neoprene, glove), add(artGeo, artMat, glove).castShadow = !1);
       glove.matrixAutoUpdate = !1;
       le.add(glove);
-      return { s, glove, upper: add(upperGeo, neoprene, le), fore: add(foreGeo, neoprene, le), cap: add(shoulderGeo, neoprene, le) };
+      return { s, glove, upper: add(upperGeo, skinMat, le), fore: add(foreGeo, skinMat, le), cap: add(shoulderGeo, skinMat, le) };
     });
   le.add(handle);
   let r = new V3_(),
@@ -7860,7 +8476,7 @@ var GEAR = (() => {
   // then snap the last few centimetres)
   let grab = { g: 0, side: 0, out: !1, prev: 0 };
   function update(chest, sr, hc, pylon, bodyUp, freeSide, pelvis, reachAmt = 0, dt = 1 / 60, faceYaw = 0) {
-    (head.position.copy(chest).addScaledVector(bodyUp, 0.1), (head.position.y += 0.15), (head.rotation.y = faceYaw));
+    (head.position.copy(chest).addScaledVector(bodyUp, 0.08), (head.position.y += 0.118), (head.rotation.y = faceYaw));
     if (!grab.out && freeSide && reachAmt > 0.3 && reachAmt >= grab.prev) ((grab.out = !0), (grab.side = freeSide));
     else if (grab.out && ((reachAmt < 0.8 && reachAmt < grab.prev - 1e-5) || reachAmt < 0.1)) grab.out = !1;
     grab.prev = reachAmt;
@@ -7885,7 +8501,7 @@ var GEAR = (() => {
     for (let q of sides) {
       let s = q.s,
         over = s > 0; // right hand palm down, left hand palm up
-      (S.copy(cs).addScaledVector(srT, s * 0.18), q.cap.position.copy(S));
+      (S.copy(cs).addScaledVector(srT, s * 0.195), q.cap.position.copy(S));
       hp.copy(hc).addScaledVector(b, s * 0.092);
       let free = fs && s === fs,
         wFree = free ? Math.min(1, ease * 3) : 0;
@@ -7930,7 +8546,7 @@ var GEAR = (() => {
     }
     return apex;
   }
-  return { update, ski, handle, sides, shift, torso, legs, head };
+  return { update, ski, handle, sides, shift, torso, legs, feet, head };
 })();
 
 // ---- view: first person (default) or the chase camera -------------------------------------------
@@ -7986,12 +8602,15 @@ function gfxAfterSkierLoad(group) {
   // the old figure's body is retired: its torso faced along the ski while the arms face the
   // boat, which is what made the arms look bolted on from the chase camera. Boots, bindings
   // and fin stay; everything else is the same connected body the first-person view uses.
-  for (let o of group.children) /^(BOOT|BINDING|SKI_FIN)/.test(o.name) || (o.visible = !1);
+  // (the old boots go too: the feet now sit in a real front boot and rear toe piece)
+  for (let o of group.children) /^SKI_FIN/.test(o.name) || (o.visible = !1);
   // ski, boots and fin pitch together about a point under the back foot: the ski rides
   // tail-down, tip-up, more so the slower and harder-loaded it is
   let trim = new Group_();
-  (trim.position.set(0, 0, TRIM_Z), group.position.z -= TRIM_Z, GEAR.ski.position.z -= TRIM_Z);
-  (dt.userData.roll.remove(group), trim.add(group), trim.add(GEAR.ski), dt.userData.roll.add(trim), dt.userData.roll.add(GEAR.legs));
+  (trim.position.set(0, 0, TRIM_Z), group.position.z -= TRIM_Z, GEAR.ski.position.z -= TRIM_Z, GEAR.feet.position.z -= TRIM_Z);
+  (dt.userData.roll.remove(group), trim.add(group), trim.add(GEAR.ski), trim.add(GEAR.feet), dt.userData.roll.add(trim), dt.userData.roll.add(GEAR.legs));
+  // the person's own proportions: shoulder line and hip line in the ski's frame
+  dt.userData.shoulders = new V3_(0, BODY.K.hipY + BODY.K.trunk, BODY.K.chestZ);
   dt.userData.trim = trim;
   gfxApplyView();
 }
@@ -8792,7 +9411,7 @@ window.__s = () =>
     l: +(nA.lean * 57.3).toFixed(0),
     sk: +nA.skiX.toFixed(2),
     chi: +(nA.chi * 57.3).toFixed(0),
-    u: +Ju().toFixed(2),
+    u: +(nA.input || 0).toFixed(2), // (reading it must not step the autopilot)
     T: Math.round(nA.tension),
     sink: +nA.sink.toFixed(2),
     aoa: +(nA.aoa * 57.3).toFixed(1),
@@ -8914,21 +9533,21 @@ function Xg(i, A) {
     chest = dt.localToWorld(new V3_(p.x, p.y, p.z)),
     // the head is carried upright over the shoulders however far the body leans: a short neck
     // along the spine, then straight up
-    eyeW = chest.clone().addScaledVector(bodyUp, 0.1),
+    eyeW = chest.clone().addScaledVector(bodyUp, 0.08),
     toBoat = new V3_().subVectors(o, chest).normalize(),
     // in the pre-turn the skier lets the handle out: arm straight and high toward the boat
     reachAmt = nA.fallen ? 0 : nA.cast,
     // gathering the handle in to the hip (arms giving as the body comes inside the arc)
     fold = Math.max(0, Math.min(1, (xe.reachBase - nA.reach) / (xe.reachBase - xe.reachMin))),
     hc = chest.clone().addScaledVector(toBoat.clone().multiplyScalar(0.8 + 0.2 * reachAmt).addScaledVector(bodyUp, -0.6 + 0.4 * reachAmt).normalize(), (0.722 + 0.1 * reachAmt) * (1 - 0.15 * fold));
-  eyeW.y += 0.24;
+  eyeW.y += 0.135;
   hc.y = Math.max(hc.y, P + 0.2);
   // the shoulders stay open to the boat whatever the ski is doing
   let sr = new V3_().crossVectors(toBoat, bodyUp).normalize(),
     I = Math.hypot(nA.x, nA.z - we.z),
     Q = nA.loose || 0,
     freeHand = reachAmt > 0.04 && nA.edgeCmd ? -Math.sign(nA.edgeCmd) : 0,
-    apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, dt.localToWorld(new V3_(0, 0.8, 0.13)), reachAmt, i, dir > 0 ? 0 : Math.PI);
+    apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, dt.localToWorld(new V3_(0, BODY.K.hipY, BODY.K.hipZ)), reachAmt, i, dir > 0 ? 0 : Math.PI);
   // A rope is only dead straight under real load. It has weight (and wind on it), so its belly
   // hangs by w L^2 / 8T: a hand's width cruising behind the boat, a clear droop whenever the
   // line goes light (gliding, reaching, the arms taking it up through a turn), and nothing at
