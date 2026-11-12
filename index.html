@@ -82,6 +82,10 @@
   #setupPanel { position:fixed; right:12px; top:50%; transform:translateY(-50%); width:244px; padding:9px 11px; background:rgba(4,20,30,.62); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid rgba(120,210,255,.22); border-radius:12px; font-size:11px; }
   #setupPanel.hidden, #start:not(.hidden) ~ #setupPanel { display:none; }
   .setup .stitle { font-size:10px; letter-spacing:1.4px; text-transform:uppercase; opacity:.6; margin-bottom:4px; }
+  /* phones: a finger held down is a held edge, never a text selection, a callout or a scroll
+     (Safari only honours the prefixed forms) */
+  html, body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; overscroll-behavior:none; }
+  #stage, #stage canvas { touch-action:none; -webkit-user-select:none; -webkit-touch-callout:none; }
   .note { margin-top:16px; font-size:10.5px; line-height:1.6; opacity:.45; }
 
   .result { font-size:52px; font-weight:800; letter-spacing:-2px; margin:0; }
@@ -9479,6 +9483,14 @@ function _P() {
   H.input = Math.max(-1, Math.min(1, i));
 }
 He.domElement.style.touchAction = "none";
+// On a phone a held finger is how the pull is held, so the browser's own long-press
+// behaviour has to be switched off: no context menu, no text selection, no magnifier, no
+// pinch or double-tap zoom. The touch is cancelled only on the water itself, so buttons and
+// the menus still get their taps. (Pointer events still arrive after a cancelled touch.)
+addEventListener("contextmenu", (i) => i.preventDefault());
+addEventListener("selectstart", (i) => i.preventDefault());
+for (let i of ["gesturestart", "gesturechange", "gestureend"]) addEventListener(i, (A) => A.preventDefault());
+for (let i of ["touchstart", "touchmove", "touchend"]) He.domElement.addEventListener(i, (A) => A.cancelable && A.preventDefault(), { passive: !1 });
 addEventListener("pointerdown", Ng);
 addEventListener("pointermove", Ug);
 addEventListener("pointerup", qP);
