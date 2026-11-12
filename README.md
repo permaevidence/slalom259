@@ -1,8 +1,8 @@
 # Slalom 259
 
 A waterski slalom game that follows the IWWF course: 259 m gate to gate, six buoys
-41 m apart at 11.50 m off the centreline, entry and exit gates 2.50 m wide, line
-18.25 m to 9.75 m, boat 46 to 58 km/h.
+41 m apart at 11.50 m off the centreline, entry and exit gates 2.50 m wide. It is a
+short-line game: line 14.25 m to 9.75 m, boat 55 or 58 km/h.
 
 Single self-contained HTML file, no build step, no network. Open `index.html`, or
 play it at https://permaevidence.github.io/slalom259/
