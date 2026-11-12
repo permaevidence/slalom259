@@ -6864,7 +6864,47 @@ var sn = 26,
   }
   (Bo.setAttribute("position", new re(en, 3)), Bo.setIndex(i));
 }
-var Nu = new zA(Bo, new We({ color: 14137466, side: Le }));
+// A slalom line is built in sections, each a different colour, joined at the take-off loops.
+// Measured from the handle: the 1.5 m handle section, the long white mainline out to the
+// 9.75 m loop, then a section per line length: 10.25 red, 10.75 black, 11.25 purple, 12 blue,
+// 13 green, 14.25 yellow, 16 orange, 18.25 red. Shortening takes sections off the boat end,
+// so the one on the pylon is always the colour of the length being skied.
+var ROPE_SECTIONS = [
+    [0, "#d7b87a"],
+    [1.5, "#e4e2d9"],
+    [9.75, "#c9281d"],
+    [10.25, "#19191c"],
+    [10.75, "#7d38b4"],
+    [11.25, "#1f55c9"],
+    [12, "#2c9a3b"],
+    [13, "#e8c51f"],
+    [14.25, "#ea7a18"],
+    [16, "#c9281d"],
+  ],
+  ROPE_MAX = 18.25,
+  ropeUV = new Float32Array((sn + 1) * 2 * 2),
+  ropeTex = (() => {
+    let c = document.createElement("canvas");
+    ((c.width = 4096), (c.height = 16));
+    let g = c.getContext("2d"),
+      px = (m) => Math.round((m / ROPE_MAX) * c.width);
+    ROPE_SECTIONS.forEach(([from, col], k) => {
+      let to = k + 1 < ROPE_SECTIONS.length ? ROPE_SECTIONS[k + 1][0] : ROPE_MAX;
+      ((g.fillStyle = col), g.fillRect(px(from), 0, px(to) - px(from), c.height));
+      // the loop and splice where two sections join
+      k > 1 && ((g.fillStyle = "rgba(20,20,22,0.55)"), g.fillRect(px(from) - 3, 0, 6, c.height));
+    });
+    // shaded across its width like a round cord, so the white mainline still reads as a line
+    // where it crosses the white of the wake
+    let sh = g.createLinearGradient(0, 0, 0, c.height);
+    (sh.addColorStop(0, "rgba(10,12,16,0.62)"), sh.addColorStop(0.3, "rgba(10,12,16,0)"), sh.addColorStop(0.7, "rgba(10,12,16,0)"), sh.addColorStop(1, "rgba(10,12,16,0.62)"));
+    ((g.fillStyle = sh), g.fillRect(0, 0, c.width, c.height));
+    let t = new CanvasTex_(c);
+    ((t.colorSpace = K_.SRGB), (t.wrapS = t.wrapT = K_.Clamp), (t.generateMipmaps = !1), (t.minFilter = t.magFilter = K_.Linear));
+    return t;
+  })();
+Bo.setAttribute("uv", new re(ropeUV, 2));
+var Nu = new zA(Bo, new We({ map: ropeTex, side: Le }));
 Nu.frustumCulled = !1;
 le.add(Nu);
 var Xs = [],
@@ -6872,18 +6912,22 @@ var Xs = [],
   wu = new B(),
   fu = new B();
 for (let i = 0; i <= sn; i++) Xs.push(new B());
-function Tg(i, A, e) {
+// i = handle end, A = pylon, e = metres of truly loose line, belly = droop of a light line
+function Tg(i, A, e, belly = 0) {
   let t = i.distanceTo(A),
     n = e !== void 0 ? e : Math.max(0, H.rope - t),
-    s = window.__forceSag !== void 0 ? window.__forceSag : Math.min(2.4, Math.sqrt(Math.max(0, (3 * n * t) / 8)));
+    s = window.__forceSag !== void 0 ? window.__forceSag : Math.min(2.4, Math.hypot(Math.sqrt(Math.max(0, (3 * n * t) / 8)), belly));
   for (let o = 0; o <= sn; o++) {
     let a = o / sn,
       c = Xs[o];
-    (c.copy(i).lerp(A, a), (c.y -= s * 4 * a * (1 - a)));
+    (c.copy(i).lerp(A, a), (c.y = Math.max(0.03, c.y - s * 4 * a * (1 - a))));
   }
   let r = 0.016;
   for (let o = 0; o <= sn; o++) {
-    let a = Xs[o];
+    let a = Xs[o],
+      // metres from the handle: the line is H.rope long and ends at the pylon
+      u = Math.max(0, H.rope - (1 - o / sn) * t) / ROPE_MAX;
+    ((ropeUV[o * 4] = u), (ropeUV[o * 4 + 1] = 0.03), (ropeUV[o * 4 + 2] = u), (ropeUV[o * 4 + 3] = 0.97));
     (wu
       .copy(Xs[Math.min(sn, o + 1)])
       .sub(Xs[Math.max(0, o - 1)])
@@ -6897,7 +6941,7 @@ function Tg(i, A, e) {
       (en[o * 6 + 4] = a.y + $i.y),
       (en[o * 6 + 5] = a.z + $i.z));
   }
-  Bo.attributes.position.needsUpdate = !0;
+  ((Bo.attributes.position.needsUpdate = !0), (Bo.attributes.uv.needsUpdate = !0));
 }
 var VP = new zA(new Ai(0.038, 0.032, 1, 6), new oe({ color: 15250828 })),
   Uu = VP.clone();
@@ -8755,6 +8799,7 @@ window.__s = () =>
     cast: +nA.cast.toFixed(2),
     reach: +nA.reach.toFixed(2),
     loose: +nA.loose.toFixed(2),
+    sag: +(VIEW.sag || 0).toFixed(3),
     vx: +nA.vx.toFixed(1),
     bz: +we.z.toFixed(1),
     bs: +(we.speed * 3.6).toFixed(1),
@@ -8884,7 +8929,13 @@ function Xg(i, A) {
     Q = nA.loose || 0,
     freeHand = reachAmt > 0.04 && nA.edgeCmd ? -Math.sign(nA.edgeCmd) : 0,
     apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, dt.localToWorld(new V3_(0, 0.8, 0.13)), reachAmt, i, dir > 0 ? 0 : Math.PI);
-  Tg(apex, o, Q);
+  // A rope is only dead straight under real load. It has weight (and wind on it), so its belly
+  // hangs by w L^2 / 8T: a hand's width cruising behind the boat, a clear droop whenever the
+  // line goes light (gliding, reaching, the arms taking it up through a turn), and nothing at
+  // all in the pull. It droops gently and snaps straight quickly, as a real line does.
+  let sagT = nA.fallen ? 0 : Math.min(0.045 * I, (0.6 * I * I) / (8 * Math.max(nA.tension, 1)));
+  VIEW.sag = (VIEW.sag || 0) + (sagT - (VIEW.sag || 0)) * Math.min(1, i * (sagT > (VIEW.sag || 0) ? 4.5 : 16));
+  Tg(apex, o, Q, VIEW.sag);
 
   // spray, churn and the ski's foam trail
   let sprayI = FX.skier(i, nA, dir);
