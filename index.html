@@ -6853,7 +6853,7 @@ xP &&
     },
     (i) => console.error("skier", i),
   );
-var sn = 26,
+var sn = 48,
   Bo = new ve(),
   en = new Float32Array((sn + 1) * 2 * 3);
 {
@@ -6915,12 +6915,25 @@ for (let i = 0; i <= sn; i++) Xs.push(new B());
 // i = handle end, A = pylon, e = metres of truly loose line, belly = droop of a light line
 function Tg(i, A, e, belly = 0) {
   let t = i.distanceTo(A),
-    n = e !== void 0 ? e : Math.max(0, H.rope - t),
-    s = window.__forceSag !== void 0 ? window.__forceSag : Math.min(2.4, Math.hypot(Math.sqrt(Math.max(0, (3 * n * t) / 8)), belly));
+    n = window.__forceLoose !== void 0 ? window.__forceLoose : e !== void 0 ? e : Math.max(0, H.rope - t),
+    loose = Math.sqrt(Math.max(0, (3 * n * t) / 8)),
+    // A loose line hangs in one smooth curve. It cannot hang lower than the water, so beyond
+    // that its middle simply lies along the surface (more slack = a longer, flatter stretch
+    // afloat) and is dragged back a little behind the boat's line. It used to be a deep
+    // parabola chopped off at the water, which left a sharp corner where it touched down.
+    s = window.__forceSag !== void 0 ? window.__forceSag : Math.min(Math.hypot(loose, belly), (i.y + A.y) * 0.62 + 0.2),
+    p = 2 + Math.min(2, n * 1.2),
+    lag = Math.min(1.1, 0.3 * loose) * H.dir,
+    W = 0.035,
+    K = 0.08;
   for (let o = 0; o <= sn; o++) {
     let a = o / sn,
-      c = Xs[o];
-    (c.copy(i).lerp(A, a), (c.y = Math.max(0.03, c.y - s * 4 * a * (1 - a))));
+      c = Xs[o],
+      sh = 1 - Math.pow(Math.abs(2 * a - 1), p);
+    c.copy(i).lerp(A, a);
+    let y = c.y - s * sh;
+    // soft landing on the surface instead of a hard clamp
+    ((c.y = W + K * Math.log(1 + Math.exp((y - W) / K))), (c.z += lag * sh));
   }
   let r = 0.016;
   for (let o = 0; o <= sn; o++) {
@@ -7726,11 +7739,13 @@ var BODY = (() => {
     Y1 = 0.62,
     VEST0 = 0.15, // bottom edge of the vest
     neckline = (u) => {
-      // top edge of the vest, metres above the hips: scooped at the front, higher at the back,
+      // top edge of the vest, metres above the hips: cut high at the front (a low scoop left a
+      // patch of bare chest under the vest's edge in the first-person view, which read as
+      // seeing inside the body), a little higher at the back,
       // running up over the shoulders at the sides (u: 0.25 front, 0.75 back)
       let front = Math.abs(u - 0.25),
         back = Math.abs(u - 0.75);
-      return front < 0.25 ? 0.445 + 0.115 * sm(front / 0.16) : 0.515 + 0.045 * sm(back / 0.16);
+      return front < 0.25 ? 0.505 + 0.055 * sm(front / 0.16) : 0.515 + 0.045 * sm(back / 0.16);
     };
   function torsoTex() {
     let W = 1024,
@@ -7770,10 +7785,10 @@ var BODY = (() => {
     ])
       for (let m = VEST0 + 0.05; m < 0.5; m += 0.052) (g.beginPath(), g.moveTo(X(u0), Yp(m) + 3), g.lineTo(X(u1), Yp(m) + 3), g.stroke());
     // zip
-    band(VEST0, 0.45, "#08090b", 0.25 - 0.007, 0.25 + 0.007);
+    band(VEST0, 0.5, "#08090b", 0.25 - 0.007, 0.25 + 0.007);
     g.fillStyle = "#70767e";
-    for (let y = Yp(0.45); y < Yp(VEST0); y += 6) g.fillRect(X(0.25) - 3, y, 6, 3);
-    ((g.fillStyle = "#b9bec5"), g.fillRect(X(0.25) - 7, Yp(0.45), 14, 26));
+    for (let y = Yp(0.5); y < Yp(VEST0); y += 6) g.fillRect(X(0.25) - 3, y, 6, 3);
+    ((g.fillStyle = "#b9bec5"), g.fillRect(X(0.25) - 7, Yp(0.5), 14, 26));
     // two buckle straps round the front
     for (let m of [0.215, 0.335]) {
       band(m - 0.014, m + 0.014, "#09090b", 0.045, 0.455);
@@ -8475,8 +8490,10 @@ var GEAR = (() => {
   // on as soon as the turn starts to finish (it used to drift back on a long fading curve and
   // then snap the last few centimetres)
   let grab = { g: 0, side: 0, out: !1, prev: 0 };
-  function update(chest, sr, hc, pylon, bodyUp, freeSide, pelvis, reachAmt = 0, dt = 1 / 60, faceYaw = 0) {
-    (head.position.copy(chest).addScaledVector(bodyUp, 0.08), (head.position.y += 0.118), (head.rotation.y = faceYaw));
+  function update(chest, sr, hc, pylon, bodyUp, freeSide, pelvis, reachAmt = 0, dt = 1 / 60, faceYaw = 0, headUp = Y) {
+    // the head sits on the neck and tips with it; the face keeps looking down the course
+    head.position.copy(chest).addScaledVector(bodyUp, 0.08).addScaledVector(headUp, 0.118);
+    (head.quaternion.setFromUnitVectors(Y, headUp), head.rotateY(faceYaw));
     if (!grab.out && freeSide && reachAmt > 0.3 && reachAmt >= grab.prev) ((grab.out = !0), (grab.side = freeSide));
     else if (grab.out && ((reachAmt < 0.8 && reachAmt < grab.prev - 1e-5) || reachAmt < 0.1)) grab.out = !1;
     grab.prev = reachAmt;
@@ -8498,6 +8515,7 @@ var GEAR = (() => {
     srT.copy(sr).multiplyScalar(Math.cos(th)).addScaledVector(t1, -fs * Math.sin(th)).normalize();
     (yb.subVectors(cs, pelvis), zb.crossVectors(srT, yb).normalize(), xb.crossVectors(yb, zb).normalize());
     (torso.matrix.makeBasis(xb, yb, zb).setPosition(pelvis), (torso.matrixWorldNeedsUpdate = !0));
+    G.dbg = { sr: srT.toArray(), pelvis: pelvis.toArray(), neckBase: chest.clone().addScaledVector(bodyUp, 0.04).toArray(), neckTop: chest.clone().addScaledVector(bodyUp, 0.14).toArray() };
     for (let q of sides) {
       let s = q.s,
         over = s > 0; // right hand palm down, left hand palm up
@@ -8546,13 +8564,14 @@ var GEAR = (() => {
     }
     return apex;
   }
-  return { update, ski, handle, sides, shift, torso, legs, feet, head };
+  let G = { update, ski, handle, sides, shift, torso, legs, feet, head, dbg: null };
+  return G;
 })();
 
 // ---- view: first person (default) or the chase camera -------------------------------------------
 // Players always get first person. The chase camera is a testing aid: it is picked in the
 // Settings section of the start screen, and only then does the V key switch views.
-var VIEW = { mode: "fp", eye: new V3_(), ready: !1, headParts: [], test: !1 };
+var VIEW = { mode: "fp", eye: new V3_(), ready: !1, headParts: [], test: !1, neck: 0.25, near: 0.04 };
 try {
   localStorage.getItem("slalom259.view") === "chase" && ((VIEW.mode = "chase"), (VIEW.test = !0));
 } catch {}
@@ -8561,7 +8580,7 @@ function gfxApplyView() {
   // one body for both views. The head would sit right on the lens, so in first person only the
   // mirror image and the shadow keep it (layer 2 is seen by the reflection camera, not the player's)
   GEAR.head.traverse((o) => o.layers.set(fp ? 2 : 0));
-  ((Et.fov = fp ? 84 : 64), (Et.near = fp ? 0.09 : 0.3), Et.updateProjectionMatrix());
+  ((Et.fov = fp ? 84 : 64), (Et.near = fp ? VIEW.near : 0.3), Et.updateProjectionMatrix());
   fp || Et.up.set(0, 1, 0);
   VIEW.ready = !1;
   gfxViewChips();
@@ -8589,6 +8608,51 @@ function gfxViewChips() {
 addEventListener("keydown", (e) => {
   VIEW.test && (e.key === "v" || e.key === "c") && gfxSetView(VIEW.mode === "fp" ? "chase" : "fp");
 });
+// how far the lens is from the surface of each nearby body part (metres; debug)
+window.__view = VIEW;
+// nearest depth (metres along the view) of each body part's surface that is inside the picture;
+// anything nearer than the near plane is being cut open (debug)
+window.__fpClear = () => {
+  Et.updateMatrixWorld();
+  let inv = Et.matrixWorldInverse.copy(Et.matrixWorld).invert(),
+    ty = Math.tan((Et.fov * Math.PI) / 360),
+    tx = ty * Et.aspect,
+    p = new V3_(),
+    depth = (pts) => {
+      let m = 9;
+      for (let q of pts) {
+        p.copy(q).applyMatrix4(inv);
+        let z = -p.z;
+        z > 0.005 && Math.abs(p.x) < z * tx && Math.abs(p.y) < z * ty && z < m && (m = z);
+      }
+      return +m.toFixed(3);
+    },
+    // sample the surface of a tube from a to b with radii ru (along u) and rv (along v)
+    tube = (a, b, ru, rv, u) => {
+      let A = new V3_(...a),
+        B = new V3_(...b),
+        ax = B.clone().sub(A).normalize(),
+        U = (u ? new V3_(...u) : Math.abs(ax.y) < 0.9 ? new V3_(0, 1, 0) : new V3_(1, 0, 0)).clone();
+      U.addScaledVector(ax, -U.dot(ax)).normalize();
+      let W = new V3_().crossVectors(ax, U),
+        pts = [];
+      for (let k = 0; k <= 10; k++)
+        for (let m = 0; m < 16; m++) {
+          let ph = (m / 16) * 6.2831853;
+          pts.push(A.clone().lerp(B, k / 10).addScaledVector(U, Math.cos(ph) * ru).addScaledVector(W, Math.sin(ph) * rv));
+        }
+      return pts;
+    },
+    o = {};
+  for (let q of GEAR.sides) {
+    let d = q.dbg,
+      n = q.s > 0 ? "R" : "L";
+    ((o[n + "shoulder"] = depth(tube(d.S, [d.S[0], d.S[1] + 0.001, d.S[2]], 0.064, 0.064).concat(tube([d.S[0], d.S[1] - 0.064, d.S[2]], [d.S[0], d.S[1] + 0.064, d.S[2]], 0.045, 0.045)))), (o[n + "upper"] = depth(tube(d.S, d.El, 0.056, 0.056))), (o[n + "fore"] = depth(tube(d.El, d.W, 0.046, 0.046))));
+  }
+  let g = GEAR.dbg;
+  g && (o.trunk = depth(tube(g.pelvis, g.neckBase, 0.2, 0.125, g.sr).concat(tube(g.neckBase, g.neckTop, 0.066, 0.066))));
+  return o;
+};
 window.__arms = () =>
   GEAR.sides.map((q) => {
     let d = q.dbg,
@@ -8623,7 +8687,7 @@ gfxApplyView();
 // Spray particles (ski wall, hull spray, prop churn) and the ski's foam trail
 // =============================================================================
 var FX = (() => {
-  let N = 6000,
+  let N = 9000,
     geo = new PlaneGeo_(1, 1),
     aPos = new Float32Array(N * 3),
     aDat = new Float32Array(N * 4), // age 0..1, size, growth, opacity
@@ -8662,8 +8726,10 @@ var FX = (() => {
         varying vec2 vUv;
         varying vec2 vSeed;
         varying vec3 vK; // opacity, glow, fog transmittance
+        varying float vMist;
         void main() {
           vUv = uv;
+          vMist = step(1.0, aDat.z); // the growing ones are mist, the rest are drops
           vSeed = fract(aDat.y * vec2(917.3, 431.7) + aPos.xz * 0.37);
           float a = aDat.x;
           float sz = aDat.y * (1.0 + a * aDat.z);
@@ -8672,12 +8738,13 @@ var FX = (() => {
           vec2 vv = (mat3(viewMatrix) * aVel).xy;
           float sp = length(vv);
           vec2 along = sp > 0.05 ? vv / sp : vec2(0.0, 1.0);
-          float stretch = 1.0 + min(sp * 0.085, 1.6);
+          float stretch = 1.0 + min(sp * 0.085, 1.6) * (2.0 - step(1.0, aDat.z)); // drops streak more than mist
           mv.xy += (vec2(along.y, -along.x) * position.x + along * position.y * stretch) * sz;
           gl_Position = projectionMatrix * mv;
           float d = length(mv.xyz);
           vec3 vd = normalize(aPos - cameraPosition);
-          vK = vec3(aDat.w * smoothstep(0.0, 0.07, a) * (1.0 - smoothstep(0.45, 1.0, a)) * smoothstep(0.3, 1.3, d),
+          // mist thins out early, so it never lingers as separate soft blobs once the sheet has passed
+          vK = vec3(aDat.w * smoothstep(0.0, 0.07, a) * (1.0 - smoothstep(mix(0.45, 0.12, vMist), mix(1.0, 0.8, vMist), a)) * smoothstep(0.3, 1.3, d),
                     1.0 + 1.1 * pow(max(dot(vd, uSunDir), 0.0), 5.0),
                     exp(-uFogDensity * uFogDensity * d * d));
         }`,
@@ -8687,12 +8754,14 @@ var FX = (() => {
         varying vec2 vUv;
         varying vec2 vSeed;
         varying vec3 vK;
+        varying float vMist;
         void main() {
           vec2 q = vUv - 0.5;
           float f = 1.0 - smoothstep(0.02, 0.25, dot(q, q));
-          // break each puff into wisps of droplets
+          // drops are broken into wisps; mist stays a soft veil, so a light spray reads as a
+          // fine sheet of water rather than separate blobs of foam
           float n = texture2D(uNoise, vUv * vec2(0.9, 0.5) + vSeed).b;
-          float a = f * f * vK.x * smoothstep(0.34, 0.70, n) * 1.9;
+          float a = f * f * vK.x * mix(smoothstep(0.34, 0.70, n) * 1.9, 0.45 + 0.75 * smoothstep(0.15, 0.85, n), vMist);
           if (a < 0.004) discard;
           vec3 c = mix(uFogCol, uColor * vK.y, vK.z);
           gl_FragColor = vec4(c * a, a);
@@ -8735,7 +8804,7 @@ var FX = (() => {
     accBoat = 0,
     R = Math.random;
   // the wall of water a slalom ski throws off its edge, plus the little rooster off the tail
-  function skier(dt, sk, dir) {
+  function skier(dt, sk, dir, foot, tail) {
     if (sk.fallen || sk.speed < 3) return 0;
     let sp = sk.speed,
       // spray follows the load on the ski, not its angle: the unloaded ski of the pre-turn
@@ -8745,17 +8814,21 @@ var FX = (() => {
       side = -Math.sign(sk.accelLat || sk.edge || 1) * dir,
       x0 = sk.skiX,
       z0 = sk.skiZ ?? sk.z;
-    accSki = Math.min(accSki + dt * (90 + 3400 * I * I) * Math.min(1, sp / 9), 120);
+    // A ski always throws a fine sheet off its edge and tail, even running flat; under load it
+    // becomes the wall. Mostly small fast drops laid down along the ski's edge with one common
+    // direction (a sheet), with a little soft mist among them.
+    accSki = Math.min(accSki + dt * (650 + 5200 * I * I) * Math.min(1, sp / 9), 140);
     for (; accSki >= 1; accSki -= 1) {
-      let along = (0.15 + R() * 0.85) * dir,
-        x = x0 + side * 0.08 + (R() - 0.5) * 0.12,
-        z = z0 + along,
-        fine = R() < 0.42,
-        pw = 0.35 + 0.65 * R();
-      if (fine)
-        emit(x, 0.04, z, side * (1.5 + 8.5 * I) * pw + (R() - 0.5), (1.2 + 7.5 * I) * pw, -dir * sp * 0.1 * R() + (R() - 0.5) * 1.6, 0.4 + 0.45 * R(), 0.02 + 0.03 * R(), 0.4, 0.9, 0.3);
+      // along the ski's own line, from under the front foot back to the tail
+      let f = R(),
+        x = (foot ? foot.x + (tail.x - foot.x) * f : x0) + side * 0.08 + (R() - 0.5) * 0.1,
+        z = foot ? foot.z + (tail.z - foot.z) * f : z0 + (0.1 + f * 0.95) * dir,
+        pw = 0.45 + 0.55 * R(),
+        fan = 0.75 + 0.5 * R();
+      if (R() > 0.1 + 0.34 * Math.min(1, I * 2.5))
+        emit(x, 0.04, z, side * (1.6 + 8.5 * I) * pw * fan + (R() - 0.5) * 0.4, (1.1 + 7.5 * I) * pw + R() * 0.4, -dir * sp * 0.1 * R() + (R() - 0.5) * 0.7, 0.24 + 0.3 * R() + 0.22 * I, 0.018 + 0.026 * R(), 0.4, 0.9, 0.3);
       else
-        emit(x, 0.03, z, side * (1.0 + 6.0 * I) * pw + (R() - 0.5) * 0.8, (0.8 + 5.6 * I) * pw, -dir * sp * 0.08 * R() + (R() - 0.5) * 1.2, 0.3 + (0.22 + 0.36 * I) * R(), 0.05 + (0.04 + 0.085 * I) * R(), 2.6, 0.2 + 0.07 * I, 1.2);
+        emit(x, 0.03, z, side * (1.1 + 6.6 * I) * pw * fan + (R() - 0.5) * 0.5, (0.8 + 6.0 * I) * pw, -dir * sp * 0.08 * R() + (R() - 0.5) * 0.8, 0.24 + (0.18 + 0.42 * I) * R(), 0.05 + (0.04 + 0.12 * I) * R(), 1.6 + 1.3 * I, 0.2 + 0.16 * I, 1.4);
     }
     return I;
   }
@@ -8780,8 +8853,8 @@ var FX = (() => {
 
 // ---- foam ribbon the ski leaves on the surface -------------------------------
 var TRAIL = (() => {
-  let N = 240,
-    LIFE = 5.5,
+  let N = 420,
+    LIFE = 8.5, // seconds the churned water stays white: well over 100 m at speed
     px = new Float32Array(N),
     pz = new Float32Array(N),
     pt_ = new Float32Array(N),
@@ -8829,10 +8902,13 @@ var TRAIL = (() => {
         varying vec2 vDat;
         varying vec3 vW;
         void main() {
-          float edge = smoothstep(0.0, 0.55, 1.0 - abs(vDat.x));
+          // dense down the middle, feathering to lace at the edges; the pattern is fine enough
+          // to show inside a strip a metre wide
+          float edge = pow(smoothstep(0.0, 0.75, 1.0 - abs(vDat.x)), 1.4);
           float amt = vDat.y * edge;
-          float pat = mix(texture2D(uFoam, vW.xz * 0.42).r, texture2D(uFoam, vW.xz * 1.15 + 0.4).r, 0.45) + amt * 0.3;
-          float a = smoothstep(1.0 - amt, 1.3 - amt, pat) * 0.95;
+          float pat = mix(texture2D(uFoam, vW.xz * 0.9).r, texture2D(uFoam, vW.xz * 2.7 + 0.4).r, 0.5);
+          // amt above 1 is unbroken white; below that the foam pattern eats holes into it
+          float a = smoothstep(1.05 - amt, 1.45 - amt, pat) * 0.95;
           if (a < 0.004) discard;
           float d = length(vW - cameraPosition);
           vec3 c = mix(uFogCol, uColor, exp(-uFogDensity * uFogDensity * d * d));
@@ -8844,14 +8920,18 @@ var TRAIL = (() => {
   mesh.renderOrder = 3;
   gfxNoReflect(mesh);
   le.add(mesh);
+  // The newest sample rides on the ski so the ribbon never lags behind it; once it is a step
+  // away from the one before, it is left where it is and a new one starts. (It used to be
+  // compared with itself, so at 60 fps it was dragged along for ever and the trail was only
+  // laid down above about 80 km/h.)
+  let STEP = 0.4,
+    TAIL_W = 0.068 / 0.55;
   function add(x, z, t, strength, side) {
-    if (count) {
-      let l = (head - 1 + N) % N;
-      if (Math.hypot(x - px[l], z - pz[l]) < 0.38) {
-        // keep the newest sample glued to the ski so the ribbon never lags behind it
-        ((px[l] = x), (pz[l] = z), (ps[l] = Math.max(ps[l], strength)));
-        return;
-      }
+    if (count >= 2) {
+      let l = (head - 1 + N) % N,
+        l2 = (head - 2 + N) % N;
+      ((px[l] = x), (pz[l] = z), (pt_[l] = t), (ps[l] = Math.max(ps[l] * 0.8, strength)), (pd[l] = side));
+      if (Math.hypot(x - px[l2], z - pz[l2]) < STEP) return;
     }
     ((px[head] = x), (pz[head] = z), (pt_[head] = t), (ps[head] = strength), (pd[head] = side));
     ((head = (head + 1) % N), (count = Math.min(N, count + 1)));
@@ -8870,10 +8950,15 @@ var TRAIL = (() => {
         nx = -dz / l,
         nz = dx / l,
         s = ps[i],
-        w = 0.1 + a * 0.3 + s * (0.3 + 0.9 * Math.min(1, a * 5)),
+        // a solid white strip off the tail that spreads, then breaks up into lace and fades:
+        // narrow when the ski runs flat, broad where the wall of spray came down beside it
+        // It leaves the tail exactly as wide as the tail (about 14 cm: the ribbon is a little
+        // over twice that, because its edges feather away) and opens out behind it.
+        w = TAIL_W + 0.46 * Math.sqrt(Math.min(1, a * 6)) + a * 0.45 + s * 0.95 * Math.min(1, a * 5),
         off = pd[i] * s * 0.55 * Math.min(1, a * 6),
         cx = px[i] + off,
-        op = Math.pow(1 - a, 1.6) * (0.42 + 0.58 * s) * Math.min(1, k / 2),
+        sm_ = Math.min(1, a / 0.3),
+        op = (1.3 + 0.25 * s - (0.72 - 0.14 * s) * sm_ * sm_ * (3 - 2 * sm_)) * (1 - Math.pow(a, 2.2)),
         o = n * 6;
       ((pos[o] = cx - nx * w), (pos[o + 1] = 0.012), (pos[o + 2] = pz[i] - nz * w));
       ((pos[o + 3] = cx + nx * w), (pos[o + 4] = 0.012), (pos[o + 5] = pz[i] + nz * w));
@@ -8886,6 +8971,14 @@ var TRAIL = (() => {
   function reset() {
     ((count = 0), (head = 0), geo.setDrawRange(0, 0));
   }
+  window.__trail = (t) => {
+    let o = [];
+    for (let k = 0; k < Math.min(count, 400); k += 12) {
+      let i = (head - 1 - k + N * 2) % N;
+      o.push([k, +((t - pt_[i]) / LIFE).toFixed(3), +ps[i].toFixed(2), +px[i].toFixed(1), +pz[i].toFixed(1)]);
+    }
+    return { count, drawn: geo.drawRange.count / 6, o };
+  };
   return { add, update, reset };
 })();
 
@@ -9432,8 +9525,10 @@ function Fg(i) {
     return ((H.coastT += i), nA.step(i, 0), we.step(i, 0), H.coastT > 1.2 && (we.speed = Math.max(2.2, we.speed - 5 * i)), !0);
   (nA.step(i, Ju()), we.step(i, nA.tension * (nA.tensionDir ? nA.tensionDir.z * nA.dir : 0)));
   let A = HA.update(nA.x, nA.z, Hu ? nA.skiX : nA.x);
-  if (A === "gate") qn("Gate", "good");
-  else if (A === "buoy") (qn("Buoy " + HA.buoys, "good"), Eo());
+  // nothing is announced when things go right: a made gate or buoy shows only on the row of
+  // dots; labels are kept for misses
+  if (A === "gate");
+  else if (A === "buoy") Eo();
   else {
     if (A === "miss") return (qn(HA.messages[HA.messages.length - 1], "bad"), Eo(), RP(), !1);
     // a missed gate no longer ends the run: it is flagged and the pass carries on
@@ -9533,6 +9628,11 @@ function Xg(i, A) {
     chest = dt.localToWorld(new V3_(p.x, p.y, p.z)),
     // the head is carried upright over the shoulders however far the body leans: a short neck
     // along the spine, then straight up
+    // The head is carried nearly upright, but it leans a quarter of the way with the spine.
+    // Bolt upright over the chest, a hard lean brought the high shoulder and upper arm to
+    // within 4 cm of the lens, inside the near plane, so the view cut into them. Leaning
+    // further with the spine fixes that but puts the chest in front of the eyes.
+    headUp = new V3_(0, 1, 0).lerp(bodyUp, VIEW.neck).normalize(),
     eyeW = chest.clone().addScaledVector(bodyUp, 0.08),
     toBoat = new V3_().subVectors(o, chest).normalize(),
     // in the pre-turn the skier lets the handle out: arm straight and high toward the boat
@@ -9540,14 +9640,14 @@ function Xg(i, A) {
     // gathering the handle in to the hip (arms giving as the body comes inside the arc)
     fold = Math.max(0, Math.min(1, (xe.reachBase - nA.reach) / (xe.reachBase - xe.reachMin))),
     hc = chest.clone().addScaledVector(toBoat.clone().multiplyScalar(0.8 + 0.2 * reachAmt).addScaledVector(bodyUp, -0.6 + 0.4 * reachAmt).normalize(), (0.722 + 0.1 * reachAmt) * (1 - 0.15 * fold));
-  eyeW.y += 0.135;
+  eyeW.addScaledVector(headUp, 0.135);
   hc.y = Math.max(hc.y, P + 0.2);
   // the shoulders stay open to the boat whatever the ski is doing
   let sr = new V3_().crossVectors(toBoat, bodyUp).normalize(),
     I = Math.hypot(nA.x, nA.z - we.z),
     Q = nA.loose || 0,
     freeHand = reachAmt > 0.04 && nA.edgeCmd ? -Math.sign(nA.edgeCmd) : 0,
-    apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, dt.localToWorld(new V3_(0, BODY.K.hipY, BODY.K.hipZ)), reachAmt, i, dir > 0 ? 0 : Math.PI);
+    apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, dt.localToWorld(new V3_(0, BODY.K.hipY, BODY.K.hipZ)), reachAmt, i, dir > 0 ? 0 : Math.PI, headUp);
   // A rope is only dead straight under real load. It has weight (and wind on it), so its belly
   // hangs by w L^2 / 8T: a hand's width cruising behind the boat, a clear droop whenever the
   // line goes light (gliding, reaching, the arms taking it up through a turn), and nothing at
@@ -9557,10 +9657,15 @@ function Xg(i, A) {
   Tg(apex, o, Q, VIEW.sag);
 
   // spray, churn and the ski's foam trail
-  let sprayI = FX.skier(i, nA, dir);
+  // where the ski actually is on the water: the very end of its tail, and a point under the
+  // front foot (the wake leaves from the first, the spray comes off the edge between the two)
+  let skiOn = !!dt.userData.trim,
+    tailW = skiOn ? GEAR.ski.localToWorld(new V3_(0, 0, 0.815)) : new V3_(a, 0, c + 0.75 * dir),
+    footW = skiOn ? GEAR.ski.localToWorld(new V3_(0, 0, -0.12)) : new V3_(a, 0, c + 0.1 * dir);
+  let sprayI = FX.skier(i, nA, dir, footW, tailW);
   FX.boat(i, we.z, we.speed, dir);
   FX.update(i);
-  if (!nA.fallen && nA.speed > 3) TRAIL.add(a, c + 0.55 * dir, A, 0.12 + 0.88 * sprayI, -Math.sign(nA.accelLat || nA.edge || 1) * dir);
+  if (!nA.fallen && nA.speed > 3) TRAIL.add(tailW.x, tailW.z, A, 0.12 + 0.88 * sprayI, -Math.sign(nA.accelLat || nA.edge || 1) * dir);
   TRAIL.update(A);
 
   let R = Math.min(1, i * 14);
