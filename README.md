@@ -9,7 +9,9 @@ play it at https://permaevidence.github.io/slalom259/
 
 Start: wide on the port side behind the boat, pull out over the pre-gates, then
 cross the entry gate from left to right and take buoy 1 on your right. Tap the
-left or right half of the screen to set the edge; "Autopilot demo" skis itself.
+left or right half of the screen to set the edge. The ski's fin, wing and binding can
+be changed under "Ski setup"; to watch a set ski itself, switch on the autopilot demo
+in Settings.
 
 Physics notes: 240 Hz fixed step, force-based edge (the water pushes the skier,
 capped by grip), a rope that only pulls and sags when it is slack, falls only on

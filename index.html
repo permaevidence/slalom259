@@ -78,7 +78,18 @@
   .setup .sinfo { margin-top:6px; font-size:10.5px; line-height:1.5; opacity:.7; text-align:left; }
   .setup .sreset { pointer-events:auto; margin-top:6px; padding:4px 10px; border-radius:8px; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.07); color:var(--ink); font-size:11px; }
   #setupChips { margin-top:8px; justify-content:flex-start; }
-  #skiModeChips { justify-content:flex-start; }
+  #skiModeChips, #autoChips { justify-content:flex-start; }
+  #gateMenu { margin-top:8px; }
+  .skisetup { margin:0 0 14px; text-align:left; border-radius:12px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.05); }
+  .skisetup summary { pointer-events:auto; cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 14px; font-size:13px; }
+  .skisetup summary::-webkit-details-marker { display:none; }
+  .skisetup summary:hover { background:rgba(255,255,255,.04); border-radius:12px; }
+  .skisetup .sk-state { font-size:10px; letter-spacing:1.4px; text-transform:uppercase; opacity:.6; white-space:nowrap; }
+  .skisetup .sk-state.mod { color:var(--warn); opacity:1; }
+  .skisetup .sk-state::after { content:"  +"; }
+  .skisetup[open] .sk-state::after { content:"  \2212"; }
+  .skisetup[open] { padding-bottom:12px; }
+  .skisetup .setup, .skisetup .chips { padding:0 14px; }
   #setupPanel { position:fixed; right:12px; top:50%; transform:translateY(-50%); width:244px; padding:9px 11px; background:rgba(4,20,30,.62); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid rgba(120,210,255,.22); border-radius:12px; font-size:11px; }
   #setupPanel.hidden, #start:not(.hidden) ~ #setupPanel { display:none; }
   .setup .stitle { font-size:10px; letter-spacing:1.4px; text-transform:uppercase; opacity:.6; margin-bottom:4px; }
@@ -135,14 +146,11 @@
       <div class="label">Boat speed</div>
       <div class="chips" id="speedChips"></div>
     </div>
-    <div class="opt">
-      <div class="label">Set top speed</div>
-      <div class="chips" id="divChips"></div>
-    </div>
-    <div class="opt">
-      <div class="label">Mode</div>
-      <div class="chips" id="modeChips"></div>
-    </div>
+    <details class="skisetup" id="skiSetup">
+      <summary><span class="sk-name">Ski setup</span><span class="sk-state"></span></summary>
+      <div class="setup" id="setupMenu"></div>
+      <div class="chips" id="setupChips"></div>
+    </details>
     <button class="go" id="go">Start the set</button>
     <details class="settings" id="settings">
       <summary>Settings</summary>
@@ -156,9 +164,9 @@
         <div class="setup"><div class="sinfo" id="skiModeInfo"></div></div>
       </div>
       <div class="opt">
-        <div class="label">Ski setup and skier (testing)</div>
-        <div class="setup" id="setupMenu"></div>
-        <div class="chips" id="setupChips"></div>
+        <div class="label">Autopilot</div>
+        <div class="chips" id="autoChips"></div>
+        <div class="setup" id="gateMenu"></div>
       </div>
     </details>
     <p class="note">Physics: 75 kg skier, 1.5 t boat with real thrust and surge, inextensible rope that can go slack, 5 g lateral grip limit.</p>
@@ -8805,12 +8813,28 @@ var GEAR = (() => {
     return t;
   }
   function skiGeo() {
-    // stations along the ski, tip first. The nose is a rounded (elliptical) end over the first
-    // 7.5% of the length: it gets closely spaced stations, stepped evenly round the curve, so
-    // the very tip reads as round instead of the point two straight facets used to make.
+    // stations along the ski, tip first. The nose rounds off over the first 7.5% of the
+    // length: it gets closely spaced stations, so the very tip reads as round instead of the
+    // point two straight facets used to make.
     let ts = [];
     for (let k = 0; k < 10; k++) ts.push(0.075 * (1 - Math.cos((k / 10) * 1.5708)));
-    for (let k = 0; k <= 37; k++) ts.push(0.075 + (0.925 * k) / 37);
+    for (let k = 0; k <= 36; k++) ts.push(0.075 + (0.9 * k) / 36);
+    ts.push(0.985, 0.992, 0.997, 1); // the rounded corners of the tail
+    // Outline measured off a top view of the D3 NEO III: width as a fraction of the widest
+    // point, by distance from the tip as a fraction of the length. Widest (6.8" on a 67") from
+    // 30% to 45% back, then a long, nearly straight taper to a tail about 40% as wide.
+    let OUT = [
+        [0, 0], [0.005, 0.333], [0.01, 0.394], [0.02, 0.495], [0.03, 0.576], [0.05, 0.687], [0.075, 0.778], [0.1, 0.84], [0.15, 0.919], [0.2, 0.96], [0.25, 0.983], [0.3, 1], [0.45, 1],
+        [0.5, 0.97], [0.55, 0.935], [0.6, 0.89], [0.65, 0.835], [0.7, 0.77], [0.75, 0.703], [0.8, 0.635], [0.85, 0.565], [0.9, 0.492], [0.95, 0.42], [0.98, 0.378], [0.99, 0.354], [0.995, 0.313], [1, 0.24],
+      ],
+      outline = (t) => {
+        if (t < 0.005) return 0.333 * Math.sqrt(t / 0.005);
+        let k = 1;
+        while (k < OUT.length - 1 && OUT[k][0] < t) k++;
+        let [t0, w0] = OUT[k - 1],
+          [t1, w1] = OUT[k];
+        return w0 + ((w1 - w0) * (t - t0)) / (t1 - t0);
+      };
     let N = ts.length - 1,
       top = new GeoB_(),
       body = new GeoB_(),
@@ -8819,9 +8843,7 @@ var GEAR = (() => {
       st = [];
     for (let k = 0; k <= N; k++) {
       let t = ts[k],
-        round = Math.sqrt(Math.max(0, 1 - Math.pow(1 - Math.min(1, t / 0.075), 2))),
-        taper = t < 0.32 ? 0.87 + 0.13 * Math.sin(((t - 0.075) / 0.245) * 1.5708) : 1 - 0.4 * Math.pow((t - 0.32) / 0.68, 1.5),
-        w = Math.max(0.0005, 0.0855 * round * Math.max(0.8, taper)),
+        w = Math.max(0.0005, 0.0855 * outline(t)),
         y = 0.105 * Math.pow(Math.max(0, 1 - t / 0.2), 2.2) + 0.012 * Math.pow(Math.max(0, (t - 0.8) / 0.2), 2),
         th = 0.007 + 0.016 * Math.pow(Math.sin(Math.min(1, t * 1.05) * Math.PI), 0.6);
       st.push({ t, z: -0.86 + 1.68 * t, w, y, th });
@@ -9427,7 +9449,7 @@ var TRAIL = (() => {
   // compared with itself, so at 60 fps it was dragged along for ever and the trail was only
   // laid down above about 80 km/h.)
   let STEP = 0.4,
-    TAIL_W = 0.068 / 0.55;
+    TAIL_W = 0.034 / 0.55;
   function add(x, z, t, strength, side) {
     if (count >= 2) {
       let l = (head - 1 + N) % N,
@@ -9454,7 +9476,7 @@ var TRAIL = (() => {
         s = ps[i],
         // a solid white strip off the tail that spreads, then breaks up into lace and fades:
         // narrow when the ski runs flat, broad where the wall of spray came down beside it
-        // It leaves the tail exactly as wide as the tail (about 14 cm: the ribbon is a little
+        // It leaves the tail exactly as wide as the tail (about 7 cm: the ribbon is a little
         // over twice that, because its edges feather away) and opens out behind it.
         w = TAIL_W + 0.46 * Math.sqrt(Math.min(1, a * 6)) + a * 0.45 + s * 0.95 * Math.min(1, a * 5),
         off = pd[i] * s * 0.55 * Math.min(1, a * 6),
@@ -9509,8 +9531,6 @@ var FA = {
   endLabel: document.getElementById("endLabel"),
   ropeChips: document.getElementById("ropeChips"),
   speedChips: document.getElementById("speedChips"),
-  modeChips: document.getElementById("modeChips"),
-  divChips: document.getElementById("divChips"),
   telEdge: document.getElementById("telEdge"),
   telLean: document.getElementById("telLean"),
   telSlip: document.getElementById("telSlip"),
@@ -9538,32 +9558,6 @@ function rn() {
       }),
       FA.ropeChips.appendChild(A));
   }
-  FA.modeChips.innerHTML = "";
-  for (let [i, A] of [
-    ["You ski", !1],
-    ["Autopilot demo", !0],
-  ]) {
-    let e = document.createElement("div");
-    ((e.className = "chip" + (H.autopilot === A ? " on" : "")),
-      (e.textContent = i),
-      (e.onclick = () => {
-        ((H.autopilot = A), rn());
-      }),
-      FA.modeChips.appendChild(e));
-  }
-  FA.divChips.innerHTML = "";
-  for (let [i, A] of [
-    ["Men 58", 58],
-    ["Women 55", 55],
-  ]) {
-    let e = document.createElement("div");
-    ((e.className = "chip" + (H.maxKmh === A ? " on" : "")),
-      (e.textContent = i),
-      (e.onclick = () => {
-        ((H.maxKmh = A), H.speed > A && (H.speed = A), rn());
-      }),
-      FA.divChips.appendChild(e));
-  }
   FA.speedChips.innerHTML = "";
   for (let i of vu) {
     let A = document.createElement("div");
@@ -9589,6 +9583,8 @@ function Xu() {
   (FA.start.classList.add("hidden"),
     FA.end.classList.add("hidden"),
     clearTimeout(bo),
+    // the set is skied at the speed chosen: from there only the line gets shorter
+    (H.maxKmh = H.speed),
     (H.pass = 1),
     (H.dir = 1),
     (H.totalBuoys = 0),
@@ -10240,12 +10236,12 @@ function Zg(i) {
 
 // ---- 65_setup.js ----
 // =============================================================================
-// Ski setup controls (testing): steppers for the settings the physics understands, shown in
-// the Settings section of the start screen and, if switched on there, in a small panel that
-// stays on screen while skiing so a setting can be changed in the middle of a pass.
+// Ski setup controls: steppers for the settings the physics understands, shown in the Ski
+// setup section of the start screen and, if switched on there, in a small panel that stays
+// on screen while skiing so a setting can be changed in the middle of a pass.
 // SKI.set is the one source of truth for the ski; these controls only call skiRide().
-// Below the ski come the skier's own dials for the gate: where the pull-out starts and how
-// hard it is. Those live in the autopilot's tuning (qe).
+// The autopilot demo is switched on in Settings, and with it come the autopilot's dials for
+// the gate: where the pull-out starts and how hard it is. Those live in its tuning (qe).
 // =============================================================================
 var SETUP = (() => {
   // key, name, step, min, max, decimals, unit
@@ -10274,7 +10270,7 @@ var SETUP = (() => {
     gateSave = () => store(GKEY, gateStock() ? null : JSON.stringify({ pullBoat: qe.pullBoat, pullEdge: qe.pullEdge })),
     KEY = "slalom259.setup",
     PANEL = "slalom259.setupPanel",
-    hosts = [],
+    panel = null,
     store = (k, v) => {
       try {
         v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v);
@@ -10309,65 +10305,86 @@ var SETUP = (() => {
   function word(bal) {
     return bal > 1.03 ? "looser than stock: turns in quicker, tail slides more, less width" : bal < 0.97 ? "more locked than stock: holds and carries speed, runs wider and later" : "stock balance";
   }
-  function render() {
+  // one stepper row: name, minus, value, plus
+  function row(h, name, text, mod, title, step) {
+    let el = document.createElement("div"),
+      nm = document.createElement("span"),
+      val = document.createElement("span"),
+      btn = (txt, dir) => {
+        let b = document.createElement("button");
+        ((b.className = "sbtn"), (b.textContent = txt), (b.onclick = () => step(dir)));
+        return b;
+      };
+    ((el.className = "srow"), (nm.className = "sname"), (nm.textContent = name));
+    ((val.className = "sval" + (mod ? " mod" : "")), (val.textContent = text), (val.title = title));
+    (el.append(nm, btn("\u2212", -1), val, btn("+", 1)), h.appendChild(el));
+  }
+  function line(h, cls, text) {
+    let el = document.createElement("div");
+    ((el.className = cls), (el.textContent = text), h.appendChild(el));
+    return el;
+  }
+  function resetBtn(h, text, hidden, fn) {
+    let rs = document.createElement("button");
+    // (on the start screen it takes no room until there is something to reset; in the panel it
+    // keeps its place, so the panel does not change size under a finger in the middle of a pass)
+    ((rs.className = "sreset"), (rs.textContent = text), h === panel ? (rs.style.visibility = hidden ? "hidden" : "visible") : (rs.style.display = hidden ? "none" : ""), (rs.onclick = fn), h.appendChild(rs));
+  }
+  function skiRows(h) {
     let r = xe.ride,
       bal = r.tip / (r.hold * r.lever);
-    for (let h of hosts) {
-      h.innerHTML = "";
-      if (h.id === "setupPanel") {
-        let t = document.createElement("div");
-        ((t.className = "stitle"), (t.textContent = "Ski setup"), h.appendChild(t));
-      }
-      for (let row of ROWS) {
-        let [k, name, , , , dec, unit] = row,
-          el = document.createElement("div"),
-          nm = document.createElement("span"),
-          val = document.createElement("span"),
-          btn = (txt, dir) => {
-            let b = document.createElement("button");
-            ((b.className = "sbtn"), (b.textContent = txt), (b.onclick = () => nudge(row, dir)));
-            return b;
-          };
-        ((el.className = "srow"), (nm.className = "sname"), (nm.textContent = name));
-        ((val.className = "sval" + (SKI.set[k] === SKI.stock[k] ? "" : " mod")), (val.textContent = show(k, SKI.set[k], dec, unit)));
-        ((val.title = "stock " + show(k, SKI.stock[k], dec, unit)), el.append(nm, btn("\u2212", -1), val, btn("+", 1)), h.appendChild(el));
-      }
-      let info = document.createElement("div");
-      ((info.className = "sinfo"), (info.textContent = "Tail hold \xD7" + (r.hold * r.lever).toFixed(2) + " \xB7 tip \xD7" + r.tip.toFixed(2) + " \xB7 balance " + bal.toFixed(2) + " (" + word(bal) + ")"), h.appendChild(info));
-      let gt = document.createElement("div");
-      ((gt.className = "stitle"), (gt.style.marginTop = "8px"), (gt.textContent = "Skier: gate"), h.appendChild(gt));
-      for (let row of GATE) {
-        let [k, name, , fmt] = row,
-          el = document.createElement("div"),
-          nm = document.createElement("span"),
-          val = document.createElement("span"),
-          btn = (txt, dir) => {
-            let b = document.createElement("button");
-            ((b.className = "sbtn"), (b.textContent = txt), (b.onclick = () => nudgeGate(row, dir)));
-            return b;
-          };
-        ((el.className = "srow"), (nm.className = "sname"), (nm.textContent = name));
-        ((val.className = "sval" + (qe[k] === gate0()[k] ? "" : " mod")), (val.textContent = fmt(qe[k])), (val.title = "default " + fmt(gate0()[k])));
-        (el.append(nm, btn("\u2212", -1), val, btn("+", 1)), h.appendChild(el));
-      }
-      let gi = document.createElement("div");
-      ((gi.className = "sinfo"), (gi.textContent = "The pull-out starts when the boat is " + Math.abs(qe.pullBoat) + " m " + (qe.pullBoat >= 0 ? "short of" : "past") + " the 55 m gates."), h.appendChild(gi));
-      let rs = document.createElement("button");
-      ((rs.className = "sreset"), (rs.textContent = "Reset all"), (rs.style.visibility = isStock() && gateStock() ? "hidden" : "visible"), h.appendChild(rs));
-      rs.onclick = () => (Object.assign(qe, gate0()), store(GKEY, null), apply());
+    for (let rw of ROWS) {
+      let [k, name, , , , dec, unit] = rw;
+      row(h, name, show(k, SKI.set[k], dec, unit), SKI.set[k] !== SKI.stock[k], "stock " + show(k, SKI.stock[k], dec, unit), (dir) => nudge(rw, dir));
     }
+    line(h, "sinfo", "Tail hold \xD7" + (r.hold * r.lever).toFixed(2) + " \xB7 tip \xD7" + r.tip.toFixed(2) + " \xB7 balance " + bal.toFixed(2) + " (" + word(bal) + ")");
+  }
+  function gateRows(h) {
+    for (let rw of GATE) {
+      let [k, name, , fmt] = rw;
+      row(h, name, fmt(qe[k]), qe[k] !== gate0()[k], "default " + fmt(gate0()[k]), (dir) => nudgeGate(rw, dir));
+    }
+    line(h, "sinfo", "The autopilot starts its pull-out when the boat is " + Math.abs(qe.pullBoat) + " m " + (qe.pullBoat >= 0 ? "short of" : "past") + " the 55 m gates.");
+  }
+  let resetGate = () => (Object.assign(qe, gate0()), store(GKEY, null), render());
+  // The ski is set in its own section of the start screen; the autopilot's gate is in Settings,
+  // under the autopilot switch. The panel that stays up while skiing has the ski, and the gate
+  // too when it is the autopilot skiing.
+  function render() {
+    let menu = document.getElementById("setupMenu"),
+      gate = document.getElementById("gateMenu");
+    if (menu) ((menu.innerHTML = ""), skiRows(menu), resetBtn(menu, "Reset to stock", isStock(), () => apply()));
+    if (gate) ((gate.innerHTML = ""), gateRows(gate), resetBtn(gate, "Reset gate", gateStock(), resetGate));
+    if (panel) {
+      panel.innerHTML = "";
+      (line(panel, "stitle", "Ski setup"), skiRows(panel));
+      H.autopilot && ((line(panel, "stitle", "Autopilot: gate").style.marginTop = "8px"), gateRows(panel));
+      resetBtn(panel, "Reset all", isStock() && (gateStock() || !H.autopilot), () => (H.autopilot && (Object.assign(qe, gate0()), store(GKEY, null)), apply()));
+    }
+    let st = document.querySelector("#skiSetup .sk-state");
+    st && ((st.textContent = isStock() ? "stock" : "custom"), (st.className = "sk-state" + (isStock() ? "" : " mod")));
     let sum = document.querySelector("#settings summary"),
       tags = [];
-    (xe.exp || tags.push("legacy skiing"), (isStock() && gateStock()) || tags.push("custom setup"));
+    (xe.exp || tags.push("legacy skiing"), H.autopilot && tags.push("autopilot demo" + (gateStock() ? "" : ", custom gate")));
     sum && (sum.textContent = ["Settings"].concat(tags).join(" \xB7 "));
+    let go = document.getElementById("go");
+    go && (go.textContent = H.autopilot ? "Watch the autopilot" : "Start the set");
+  }
+  // the autopilot demo: off unless switched on here (it is not remembered between visits)
+  function autoChips() {
+    let el = document.getElementById("autoChips");
+    if (!el) return;
+    el.innerHTML = "";
+    let c = document.createElement("div");
+    ((c.className = "chip" + (H.autopilot ? " on" : "")), (c.textContent = "Autopilot demo: the game skis the set itself"));
+    c.onclick = () => ((H.autopilot = !H.autopilot), autoChips(), render());
+    el.appendChild(c);
   }
   // the panel that stays up while skiing; taps on it must not reach the edge control
-  let panel = document.createElement("div");
+  panel = document.createElement("div");
   ((panel.id = "setupPanel"), (panel.className = "setup hidden"));
   for (let ev of ["pointerdown", "pointerup", "touchstart", "mousedown", "click"]) panel.addEventListener(ev, (e) => e.stopPropagation());
   FA.end.after(panel);
-  let menu = document.getElementById("setupMenu");
-  (menu && hosts.push(menu), hosts.push(panel));
   function panelChips() {
     let el = document.getElementById("setupChips");
     if (!el) return;
@@ -10441,8 +10458,8 @@ var SETUP = (() => {
         for (let [k] of GATE) isFinite(+o[k]) && (qe[k] = gateClamp(k, +o[k]));
       } catch {}
   }
-  (render(), panelChips(), modeChips());
-  return { render, apply, modeChips, setMode };
+  (render(), panelChips(), modeChips(), autoChips());
+  return { render, apply, modeChips, setMode, autoChips };
 })();
 
 
