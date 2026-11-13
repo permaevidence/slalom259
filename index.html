@@ -82,6 +82,8 @@
   #setupPanel { position:fixed; right:12px; top:50%; transform:translateY(-50%); width:244px; padding:9px 11px; background:rgba(4,20,30,.62); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); border:1px solid rgba(120,210,255,.22); border-radius:12px; font-size:11px; }
   #setupPanel.hidden, #start:not(.hidden) ~ #setupPanel { display:none; }
   .setup .stitle { font-size:10px; letter-spacing:1.4px; text-transform:uppercase; opacity:.6; margin-bottom:4px; }
+  /* a buoy rounded but not yet skied away from: half a buoy */
+  .dot.half { background:linear-gradient(90deg, #4fe08a 50%, transparent 50%); border-color:#4fe08a; }
   /* phones: a finger held down is a held edge, never a text selection, a callout or a scroll
      (Safari only honours the prefixed forms) */
   html, body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; overscroll-behavior:none; }
@@ -4113,6 +4115,10 @@ var ze = { length: 259, spacing: 41, firstBuoy: 27, buoyOffset: 11.5, buoyRadius
     // 5 m/s the load is several times body weight: the handle goes, or the skier with it.
     // Above snatchMax (m/s) it is a fall.
     snatchMax: 4.5,
+    // A hit a little over that the hands can still hold: the skier hangs on and is pulled
+    // over the front, toward the boat. Above snatchRip the handle is torn out of the hands
+    // and flies off toward the boat, and the skier goes down where they are.
+    snatchRip: 6.5,
     ropeModel: "pendulum",
     swingDamp: 8,
     ropeBounce: 0,
@@ -4469,8 +4475,9 @@ var ho = class {
           ((this.snatch = sep), (this.snatchLoose = this.looseMax || 0), (this.snatchT = 0), (this.looseMax = 0));
           window.__hits && this === nA && window.__hits.push([+sep.toFixed(2), +this.snatchLoose.toFixed(2), +((this.boat.speed + this.vz * c) * 3.6).toFixed(0), +(this.speed * 3.6).toFixed(0), +this.x.toFixed(1)]);
           if (e.exp && sep > e.snatchMax) {
-            ((this.fallen = !0), (this.state = "fallen"), (this.fallT = 0));
-            this.fallReason = "Slack hit too hard: " + this.snatchLoose.toFixed(1) + " m of loose line came tight with " + Math.round(sep * 3.6) + " km/h to make up";
+            let rip = sep > e.snatchRip,
+              how = this.snatchLoose.toFixed(1) + " m of loose line came tight with " + Math.round(sep * 3.6) + " km/h to make up";
+            this.fall(rip ? "pop" : "drag", (rip ? "Handle torn out of the hands: " : "Pulled over the front: ") + how, t.x - this.x, t.z - this.z, sep);
             return;
           }
           let J = Math.atan2(iA, CA * c);
@@ -4516,18 +4523,101 @@ var ho = class {
         (this.speed = Math.hypot(this.vx, this.vz)),
         (this.ropeDist = P));
     }
+    // The skier goes down. kind: "pop" = the handle is torn out of the hands, "drag" = the
+    // skier hangs on and is pulled over toward the boat, "wash" = the ski slides out and the
+    // body drops to the inside. (px, pz) = the way the body goes over, hit = m/s of the snatch.
+    fall(kind, reason, px = 0, pz = 0, hit = 0) {
+      if (this.fallen) return;
+      let l = Math.hypot(px, pz) || 1,
+        // how much of the hit reaches the body before the hands let go
+        k = kind === "drag" ? 0.75 : kind === "pop" ? 0.3 : 0;
+      ((this.fallen = !0), (this.state = "fallen"), (this.fallT = 0), (this.fallKind = kind), (this.fallReason = reason));
+      ((this.fallDx = px / l), (this.fallDz = pz / l), (this.fallHit = hit));
+      ((this.vx += this.fallDx * hit * k), (this.vz += this.fallDz * hit * k));
+      // the body turns over about its feet at the rate the hit gave its top, then gravity
+      ((this.topple = 0), (this.toppleRate = kind === "wash" ? 2.5 : Math.min(7, (hit * (kind === "drag" ? 0.9 : 0.5)) / 0.9)), (this.fallP = 0), (this.sinkP = 0), (this.downT = -1), (this.tumble = 0), (this.tumbling = null));
+      // seconds the hands still have the handle
+      ((this.gripT = kind === "drag" ? 0.35 : kind === "wash" ? 0.12 : 0), (this.hdl = null));
+      // where the feet are, relative to the body: under it now, trailing behind it once it is down
+      ((this.footX = (this.skiX ?? this.x) - this.x), (this.footZ = (this.skiZ ?? this.z) - this.z));
+    }
     step(A, e) {
       let t = xe;
       if (((this.input = e), this.fallen)) {
         this.fallT += A;
-        let Q = Math.exp(-2.5 * A);
-        ((this.vx *= Q),
-          (this.vz *= Q),
-          (this.x += this.vx * A),
-          (this.z += this.vz * A),
-          (this.tension = 0),
-          (this.slack = !0),
-          (this.speed = Math.hypot(this.vx, this.vz)));
+        let py = this.pylon(),
+          bvz = -this.boat.speed * this.dir,
+          rx = py.x - this.x,
+          rz = py.z - this.z,
+          rl = Math.hypot(rx, rz) || 1,
+          held = this.fallT < this.gripT;
+        ((rx /= rl), (rz /= rl));
+        if (held && this.fallKind === "drag") {
+          // still hanging on: the boat hauls the body along the line, up toward its own speed
+          let rel = this.vx * rx + (this.vz - bvz) * rz;
+          if (rel < 0) {
+            let g = Math.min(-rel, 70 * A);
+            ((this.vx += rx * g), (this.vz += rz * g));
+          }
+        }
+        // Once the hands are off: a body that still has real speed tumbles end over end
+        // across the water, fast, and stops in a few metres; a slow one just goes in.
+        if (!held && this.tumbling === null) {
+          let sp = Math.hypot(this.vx, this.vz) || 1;
+          ((this.tumbling = sp > 6), (this.tumAx = this.vx / sp), (this.tumAz = this.vz / sp));
+        }
+        // a body ploughing and skipping through the water loses its speed fast
+        let Q = Math.exp(-(held ? 1 : this.tumbling ? 3.2 : 4.5) * A);
+        ((this.vx *= Q), (this.vz *= Q), (this.x += this.vx * A), (this.z += this.vz * A), (this.speed = Math.hypot(this.vx, this.vz)));
+        // going over: an upended pendulum falling until the body is flat on the water
+        let lim = this.fallKind === "wash" ? Math.max(0.15, 1.5 - Math.abs(this.lean * 0.82 + (this.lay || 0))) : 1.5;
+        if (this.topple < lim) {
+          this.toppleRate += (t.g / 0.9) * Math.sin(this.topple + 0.2) * A;
+          this.topple = Math.min(lim, this.topple + this.toppleRate * A);
+          this.topple >= lim && (this.downT = this.fallT);
+        }
+        this.fallP = Math.min(1, this.topple / lim); // 0 = still up, 1 = flat on the water
+        if (this.tumbling) {
+          if (this.speed > 2.5) this.fallP > 0.5 && (this.tumble += Math.min(13, this.speed / 0.6) * A);
+          else this.tumbling = !1;
+        } else if (this.tumbling === !1 && this.tumble) {
+          // (it comes to rest the right way round: the last part-turn is finished off)
+          let tg = Math.ceil(this.tumble / (2 * Math.PI) - 0.25) * 2 * Math.PI;
+          this.tumble += Math.max(-14 * A, Math.min(14 * A, tg - this.tumble));
+        }
+        // Then it goes in, quickly: it ends up floating upright in its vest, head and
+        // shoulders out and the rest under. A slow fall goes in as it goes over.
+        let in_ = !held && this.tumbling === !1 && this.fallP > 0.5 ? 1 : 0;
+        this.sinkP += (in_ - this.sinkP) * (1 - Math.exp(-A / 0.13));
+        ((this.skiX = this.x + this.footX * (1 - this.fallP) - this.fallDx * 0.9 * this.fallP), (this.skiZ = this.z + this.footZ * (1 - this.fallP) - this.fallDz * 0.9 * this.fallP));
+        // the handle, once the hands have let go: a small weight on the end of the line,
+        // thrown toward the boat by the rope's recoil, skipping on the water behind it
+        if (!held) {
+          let h = this.hdl;
+          if (!h) {
+            let rec = this.fallKind === "pop" ? 5 + 1.2 * this.fallHit : this.fallKind === "drag" ? 4 : 2;
+            h = this.hdl = { x: this.x + rx * 0.55, y: 0.75, z: this.z + rz * 0.55, vx: this.vx + rx * rec, vy: 1.6, vz: this.vz + rz * rec, L: Math.max(this.rope + 0.3, rl - 0.55) };
+          }
+          ((h.vy -= t.g * A), (h.x += h.vx * A), (h.y += h.vy * A), (h.z += h.vz * A));
+          if (h.y < 0.04) {
+            // on the water: it skips, and the water drags at it
+            ((h.y = 0.04), h.vy < 0 && (h.vy = -0.35 * h.vy));
+            let k = Math.exp(-3 * A);
+            ((h.vx *= k), (h.vz *= k));
+          }
+          // the line only pulls: once it is out to its length the boat takes the handle with it
+          let ox = h.x - py.x,
+            oy = h.y - 0.9,
+            oz = h.z - py.z,
+            d = Math.hypot(ox, oy, oz) || 1;
+          if (d > h.L) {
+            ((ox /= d), (oy /= d), (oz /= d));
+            ((h.x = py.x + ox * h.L), (h.y = Math.max(0.04, 0.9 + oy * h.L)), (h.z = py.z + oz * h.L));
+            let out = h.vx * ox + h.vy * oy + (h.vz - bvz) * oz;
+            out > 0 && ((h.vx -= ox * out), (h.vy -= oy * out), (h.vz -= oz * out));
+          }
+        }
+        ((this.tension = 0), (this.slack = !0), (this.loose = 0));
         return;
       }
       if (Math.abs(e) > 0.02) {
@@ -4707,7 +4797,7 @@ var ho = class {
       let z = Math.abs(this.lean - this.leanReq),
         I = this.washT > 0.4;
       ((this.imbalance = I ? this.imbalance + A : Math.max(0, this.imbalance - 2 * A)),
-        this.imbalance > t.fallTime && ((this.fallen = !0), (this.fallReason = "Ski washed out"), (this.state = "fallen")),
+        this.imbalance > t.fallTime && this.fall("wash", "Ski washed out", this.dir * Math.sign(this.lean * 0.82 + (this.lay || 0) || 1), 0, 0),
         (this.speed = Math.hypot(this.vx, this.vz)),
         (this.state = this.fallen ? "fallen" : this.slack ? "slack" : Math.abs(this.edge) > 0.2 ? "carve" : "pull"));
     }
@@ -4721,6 +4811,11 @@ var ho = class {
         (this.order = this.dir > 0 ? A.buoys : [...A.buoys].reverse()),
         (this.next = 0),
         (this.buoys = 0),
+        // Tournament scoring: rounding a buoy is half a buoy. It becomes a full one only when
+        // the skier has skied away from it and reached the nearest line of boat-guide buoys
+        // before the level of the next buoy (or the exit gate). A fall in between leaves the half.
+        (this.score = 0),
+        (this.half = null),
         (this.results = []),
         (this.messages = []),
         (this.status = "running"),
@@ -4735,6 +4830,11 @@ var ho = class {
     update(A, e, t = A) {
       if (!this.started) return (this.onStart(A, e), null);
       if (this.status !== "running") return ((this.prevX = A), (this.prevZ = e), (this.prevSkiX = t), null);
+      // the buoy just rounded counts in full once the ski is back at the boat-guide line on its side
+      if (this.half && this.half.side * t <= ze.guideOffset) {
+        ((this.half.full = !0), (this.half = null), (this.score += 0.5), (this.prevX = A), (this.prevSkiX = t), (this.prevZ = e));
+        return "full";
+      }
       let n = null,
         s = this.course,
         r = this.dir > 0 ? s.gateZ : s.exitZ,
@@ -4753,12 +4853,15 @@ var ho = class {
           let l = this.order[this.next - 1],
             h = l.side * u - ze.buoyOffset,
             f = h >= -this.buoyTol;
-          (this.results.push({ i: l.i, ok: f, clearance: h }),
+          // (a half still waiting at the level of the next buoy stays a half)
+          this.half = null;
+          (this.results.push({ i: l.i, ok: f, clearance: h, side: l.side, full: !1 }),
             f
-              ? ((this.buoys += 1), (this.next += 1), (n = "buoy"))
+              ? ((this.buoys += 1), (this.score += 0.5), (this.half = this.results[this.results.length - 1]), (this.next += 1), (n = "buoy"))
               : ((this.status = "failed"), this.messages.push(`Buoy ${l.i}: inside by ${(-h).toFixed(2)} m`), (n = "miss")));
         } else
-          Math.abs(v) < ze.gateHalf + this.gateTol
+          ((this.half = null),
+          Math.abs(v) < ze.gateHalf + this.gateTol)
             ? ((this.status = "complete"), (this.next = 8), (n = "complete"))
             : ((this.status = "complete"), (this.next = 8), (this.gateMissed = !0), this.messages.push(`Missed the exit gate (${v.toFixed(1)} m)`), (n = "exitMiss"));
       }
@@ -8898,7 +9001,16 @@ var GEAR = (() => {
     }
     return apex;
   }
-  let G = { update, ski, handle, sides, shift, torso, legs, feet, head, dbg: null };
+  // the handle on its own, out of the hands: wherever the line has taken it, bridle to the boat
+  function freeHandle(p, pylon) {
+    r.subVectors(pylon, p).normalize();
+    b.crossVectors(r, Y).normalize();
+    n.crossVectors(b, r).normalize();
+    t2.copy(r).negate();
+    (handle.matrix.makeBasis(b, n, t2).setPosition(p), (handle.matrixWorldNeedsUpdate = !0));
+    return apex.copy(p).addScaledVector(r, handle.userData.apex + 0.04);
+  }
+  let G = { update, freeHandle, ski, handle, sides, shift, torso, legs, feet, head, dbg: null };
   return G;
 })();
 
@@ -9354,7 +9466,7 @@ function Eo() {
     let A = document.createElement("div");
     if (((A.className = "dot" + (HA && HA.next === i ? " next" : "")), HA)) {
       let e = HA.results.find((t) => t.i === i);
-      e && A.classList.add(e.ok ? "pass" : "miss");
+      e && A.classList.add(e.ok ? (e.full ? "pass" : "half") : "miss");
     }
     FA.dots.appendChild(A);
   }
@@ -9445,7 +9557,7 @@ function Sg() {
   if (!i) {
     ((H.running = !1),
       (FA.endLabel.textContent = "Set complete"),
-      (FA.endScore.textContent = String(H.totalBuoys)),
+      (FA.endScore.textContent = fmtScore(H.totalBuoys)),
       (FA.endMsg.textContent = H.gateMisses ? "Shortest line, top speed. Gates missed along the way: " + H.gateMisses + "." : "Shortest line, top speed, every pass clean."),
       (FA.endPeak.textContent = String(Math.round(H.peakSpeed))),
       (FA.endTension.textContent = String(Math.round(H.peakTension))),
@@ -9453,7 +9565,7 @@ function Sg() {
       FA.end.classList.remove("hidden"));
     return;
   }
-  ((H.coasting = !0), (H.coastT = 0), (H.totalBuoys += HA.buoys));
+  ((H.coasting = !0), (H.coastT = 0), (H.totalBuoys += HA.score));
   let A =
     i.rope !== H.rope
       ? "Pass " + H.pass + (HA.gateMissed ? " done, gate missed" : " clean") + " \u2014 line down to " + i.rope.toFixed(2) + " m"
@@ -9464,12 +9576,16 @@ function Sg() {
       ((H.pass += 1), (H.speed = i.speed), (H.rope = i.rope), (H.dir = -H.dir), xo(H.dir), rn(), (H.running = !0));
     }, 2600)));
 }
+// scores go in halves: 2, 2.5, 3
+function fmtScore(v) {
+  return String(Math.round(v * 2) / 2);
+}
 function RP() {
-  ((H.running = !1), (H.totalBuoys = (H.totalBuoys || 0) + (HA ? HA.buoys : 0)));
+  ((H.running = !1), (H.totalBuoys = (H.totalBuoys || 0) + (HA ? HA.score : 0)));
   let i = HA.status === "complete",
-    A = HA.buoys;
+    A = HA.score;
   ((FA.endLabel.textContent = i ? "Run complete" : (HA.status === "failed", "Run over")),
-    (FA.endScore.textContent = String(A)),
+    (FA.endScore.textContent = fmtScore(A)),
     (FA.endLabel.textContent = i ? "Run complete" : "Out on pass " + H.pass),
     (FA.endMsg.textContent = i ? "Through the exit gate. Six for six." : HA.messages[HA.messages.length - 1] || nA.fallReason || "Out of the course"),
     (FA.endPeak.textContent = String(Math.round(H.peakSpeed))),
@@ -9914,7 +10030,7 @@ window.__skierBox = () => {
 };
 // debug: hand the autopilot's internals to a test function
 window.__apLab = (fn) => fn({ AP, apClone, apRun, apEdge, qe, ze, H, dt: $n, step: Fg, get nA() { return nA; }, get we() { return we; }, get HA() { return HA; }, get ie() { return ie; } });
-window.__judge = () => ({ status: HA.status, buoys: HA.buoys, results: HA.results, messages: HA.messages, next: HA.next, dir: HA.dir });
+window.__judge = () => ({ status: HA.status, buoys: HA.buoys, score: HA.score, results: HA.results, messages: HA.messages, next: HA.next, dir: HA.dir });
 window.__skierDir = () => {
   let i = new B();
   dt.getWorldDirection(i);
@@ -10032,6 +10148,8 @@ function Ju() {
   return u;
 }
 function Fg(i) {
+  // a fall is watched through: the skier goes down, the handle flies, and only then the pass ends
+  if (H.falling) return ((H.fallT += i), nA.step(i, 0), we.step(i, 0), H.fallT > 2.4 ? ((H.falling = !1), RP(), !1) : !0);
   if (H.coasting)
     return ((H.coastT += i), nA.step(i, 0), we.step(i, 0), H.coastT > 1.2 && (we.speed = Math.max(2.2, we.speed - 5 * i)), !0);
   (nA.step(i, Ju()), we.step(i, nA.tension * (nA.tensionDir ? nA.tensionDir.z * nA.dir : 0)));
@@ -10039,7 +10157,7 @@ function Fg(i) {
   // nothing is announced when things go right: a made gate or buoy shows only on the row of
   // dots; labels are kept for misses
   if (A === "gate");
-  else if (A === "buoy") Eo();
+  else if (A === "buoy" || A === "full") Eo();
   else {
     if (A === "miss") return (qn(HA.messages[HA.messages.length - 1], "bad"), Eo(), RP(), !1);
     // a missed gate no longer ends the run: it is flagged and the pass carries on
@@ -10048,7 +10166,7 @@ function Fg(i) {
     if (A === "complete" || A === "exitMiss") return (Eo(), Sg(), !0);
   }
   return nA.fallen
-    ? (qn(nA.fallReason, "bad"), RP(), !1)
+    ? (qn(nA.fallReason, "bad"), (H.falling = !0), (H.fallT = 0), !0)
     : ((H.peakSpeed = Math.max(H.peakSpeed, nA.kmh)),
       (H.peakTension = Math.max(H.peakTension, nA.tension)),
       (H.slackFrames += nA.loose > 0.03 ? 1 : 0),
@@ -10277,7 +10395,7 @@ var TRIM_SIGN = 1;
 // =============================================================================
 var WAKE = { dist: 0, lastZ: null, amp: 0 };
 function xo(i = H.dir) {
-  ((H.dir = i), (H.coasting = !1), (H.coastT = 0), (ie = bP(Cu, ju)));
+  ((H.dir = i), (H.coasting = !1), (H.coastT = 0), (H.falling = !1), (ie = bP(Cu, ju)));
   let A = i > 0 ? ie.gateZ : ie.exitZ,
     e = 0,
     t = A + i * 130,
@@ -10338,6 +10456,43 @@ function Xg(i, A) {
   // (the lay-in of the reach is drawn in full on top of the body's own lean)
   let h = -Math.max(-1.29, Math.min(1.29, Math.max(-1.35, Math.min(1.35, nA.lean)) * 0.82 + (nA.lay || 0))) + v * 0.7;
   dt.rotation.set(-u * 0.85 * dir, dir > 0 ? -nA.psi : Math.PI + nA.psi, h);
+  // A fall: the whole figure turns over about a level axis square to the way it is going
+  // down (toward the boat when the rope pulled it over, to the inside when the ski washed
+  // out), settles into the water, and rolls on while it still has speed.
+  if (nA.fallen && nA.fallP !== void 0) {
+    // (from however it was leaning to laid out flat along the way it fell, head first; then,
+    // as it stops, it settles upright into the water until only head and shoulders are out)
+    let sk = nA.sinkP || 0,
+      up0 = new V3_(0, 1, 0).applyQuaternion(dt.quaternion),
+      flat = dt.quaternion.clone().setFromUnitVectors(up0, new V3_(nA.fallDx * (1 - 0.7 * sk), 0.08 + 0.92 * sk, nA.fallDz * (1 - 0.7 * sk)).normalize());
+    dt.quaternion.premultiply(dt.quaternion.clone().identity().slerp(flat, nA.fallP));
+    // (tumbling: end over end about a level axis square to the way it is travelling)
+    // (kept for the skier's own eyes, which go over and round with the body. The head was
+    // level to begin with, whatever the body's lean, and it is level again once afloat.)
+    VIEW.fallQ = (VIEW.fallQ || dt.quaternion.clone()).identity().slerp(flat.clone().setFromUnitVectors(new V3_(0, 1, 0), new V3_(nA.fallDx * (1 - sk), 0.08 + 0.92 * sk, nA.fallDz * (1 - sk)).normalize()), nA.fallP);
+    if (nA.tumble) {
+      let tq = flat.setFromAxisAngle(new V3_(nA.tumAz, 0, -nA.tumAx).normalize(), nA.tumble);
+      (dt.quaternion.premultiply(tq), VIEW.fallQ.premultiply(tq));
+    }
+    // The figure is placed by its middle, not its feet: standing height at first, on the
+    // water (bouncing as it tumbles) once it is down, and under to the chest when it has sunk.
+    let mid = new V3_(0, 0.8, 0).applyQuaternion(dt.quaternion),
+      // (going in, the head goes right under for a moment before the vest brings it back up)
+      yC = P + 0.8 * (1 - nA.fallP) + nA.fallP * (0.12 + (nA.tumbling ? 0.3 * Math.abs(Math.sin(nA.tumble)) : 0)) - 0.62 * sk - 1.8 * sk * (1 - sk);
+    dt.position.set(nA.x - mid.x, yC - mid.y, nA.z - mid.z);
+    // the splash as the body hits the water, then the wash it pushes while it slides
+    let down = nA.downT >= 0,
+      nSp = down && !VIEW.splashed ? 260 : nA.speed > 1.5 && nA.fallP > 0.6 ? Math.round(Math.min(70, nA.speed * (nA.tumbling ? 6 : 3))) : 0,
+      Rn = Math.random,
+      bx = nA.x + nA.fallDx * 0.7,
+      bz = nA.z + nA.fallDz * 0.7;
+    down && (VIEW.splashed = !0);
+    for (let k = 0; k < nSp; k++) {
+      let an = Rn() * Math.PI * 2,
+        sp = (down && k < 200 ? 2 + 4.5 * Rn() : 0.6 + 1.6 * Rn()) * (0.5 + 0.1 * Math.min(8, nA.speed + (nA.fallHit || 0)));
+      FX.emit(bx + (Rn() - 0.5) * 0.9, 0.05, bz + (Rn() - 0.5) * 0.9, Math.cos(an) * sp * 0.7 + nA.vx * 0.5, sp * (0.7 + 0.8 * Rn()), Math.sin(an) * sp * 0.7 + nA.vz * 0.5, 0.35 + 0.5 * Rn(), 0.03 + 0.07 * Rn(), 1.2, 0.5 + 0.4 * Rn(), 0.8);
+    }
+  } else ((VIEW.splashed = !1), (VIEW.fallQ = null));
   // handle, bridle, gloves and sleeves, all hung on the one leaning body: shoulders on the
   // spine, straight arms running down the body to a handle held low in front of the hips, on
   // the boat's side of them. From the skier's eyes that reads as chest, arms, handle, then
@@ -10390,7 +10545,9 @@ function Xg(i, A) {
     fold = Math.max(0, Math.min(1, (xe.reachBase - nA.reach) / (xe.reachBase - xe.reachMin))),
     hc = chest.clone().addScaledVector(toBoat.clone().multiplyScalar(0.8 + 0.2 * reachAmt).addScaledVector(bodyUp, -0.6 + 0.4 * reachAmt).normalize(), (0.722 + 0.1 * reachAmt) * (1 - 0.15 * fold) * (1 - 0.3 * tuck));
   eyeW.addScaledVector(headUp, 0.135);
-  hc.y = Math.max(hc.y, P + 0.2);
+  // (down, with the handle gone: the arms drop out in front of the body onto the water)
+  if (nA.fallen && nA.hdl) hc.lerp(chest.clone().addScaledVector(new V3_(nA.fallDx, -0.3, nA.fallDz).normalize(), 0.6), Math.min(1, (nA.fallT - nA.gripT) / 0.35));
+  hc.y = Math.max(hc.y, P + (nA.fallen ? 0.03 : 0.2));
   // the shoulders stay open to the boat whatever the ski is doing
   let sr = new V3_().crossVectors(toBoat, bodyUp).normalize(),
     I = Math.hypot(nA.x, nA.z - we.z),
@@ -10404,6 +10561,8 @@ function Xg(i, A) {
   VIEW.sag = (VIEW.sag || 0) + (sagT - (VIEW.sag || 0)) * Math.min(1, i * (sagT > (VIEW.sag || 0) ? 4.5 : 16));
   // (the handle's own triangle hangs the way the rope leaves it)
   let apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, pelvisW, reachAmt, i, dir > 0 ? 0 : Math.PI, headUp, ropeLeave(VIEW.leave || (VIEW.leave = new V3_()), hc, o, Q, VIEW.sag));
+  // (once the hands have let go, the handle is wherever the line has taken it)
+  if (nA.fallen && nA.hdl) ((apex = GEAR.freeHandle(new V3_(nA.hdl.x, nA.hdl.y, nA.hdl.z), o)), (Q = Math.max(0, nA.hdl.L - apex.distanceTo(o) - 0.3)));
   Tg(apex, o, Q, VIEW.sag);
 
   // spray, churn and the ski's foam trail
@@ -10437,7 +10596,25 @@ function Xg(i, A) {
     ((VIEW.eye.x += dir * Math.sin(_n) * 0.12), (VIEW.eye.z -= dir * Math.cos(_n) * 0.12));
     XP.set(VIEW.eye.x + dir * Math.sin(_n) * 30, VIEW.eye.y - 11.5, VIEW.eye.z - dir * Math.cos(_n) * 30);
     // the head stays level however far the body leans: the horizon never tilts
-    (Et.up.set(0, 1, 0), Et.position.copy(VIEW.eye), Et.lookAt(XP));
+    Et.up.set(0, 1, 0);
+    if (nA.fallen && VIEW.fallQ) {
+      // A fall is seen through the skier's own eyes: the view goes over with the body, round
+      // with it if it tumbles, under the water with it, and comes up where the skier floats.
+      (XP.sub(VIEW.eye).applyQuaternion(VIEW.fallQ).add(VIEW.eye), Et.up.applyQuaternion(VIEW.fallQ));
+      // (at rest the eyes come up off the water to look for the boat, not down at the chest)
+      XP.y += 11 * (nA.sinkP || 0);
+    }
+    (Et.position.copy(VIEW.eye), Et.lookAt(XP));
+    // under the surface everything goes green and dim
+    {
+      let el = VIEW.underEl;
+      if (!el) {
+        el = VIEW.underEl = document.createElement("div");
+        el.style.cssText = "position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 50% 35%, rgba(40,110,115,.72), rgba(6,38,48,.93));opacity:0;transition:opacity .06s linear;";
+        document.getElementById("stage").appendChild(el);
+      }
+      el.style.opacity = nA.fallen && VIEW.eye.y < St(VIEW.eye.x, VIEW.eye.z, A) + 0.01 ? "1" : "0";
+    }
     window.__dbg = { cam: VIEW.eye.toArray(), sk: [nA.x, nA.z], ch: nA.chi };
   } else {
     let L = Rg(),
@@ -10610,9 +10787,9 @@ window.__simPass = (dir, speed, rope, auto = !0, human) => {
     tMax = 0;
   let tr = (window.__trace = []),
     every = window.__traceEvery || 0;
-  for (; H.running && !H.coasting && HA.status === "running" && n < 240 * 90; n++) (every && n % every === 0 && tr.push([+(n / 240).toFixed(2), +(dir * (nA.z - ie.gateZ)).toFixed(1), +nA.x.toFixed(2), +nA.skiX.toFixed(2), +nA.vx.toFixed(1), AP.phase[0], AP.hold, +nA.edgeCmd.toFixed(2), +Math.max(-1.29, Math.min(1.29, nA.lean * 0.82 + nA.lay)).toFixed(2), +(nA.want || 0).toFixed(1), +nA.accelLat.toFixed(1), +nA.cast.toFixed(2), +nA.reach.toFixed(2), nA.slack ? +(1 + nA.loose).toFixed(2) : 0, +(nA.speed * 3.6).toFixed(0), Math.round(nA.tension), +(nA.drag / xe.mass).toFixed(1), +nA.sink.toFixed(2)]), Fg($n), HA.next >= 1 && HA.next <= 6 && (cN++, nA.loose > 0.03 && (sN++, (gap = Math.max(gap, nA.loose))), (vmin = Math.min(vmin, nA.speed)), (vmax = Math.max(vmax, nA.speed)), (tMax = Math.max(tMax, nA.tension))), (wide = Math.max(wide, Math.abs(nA.skiX))), (reach = Math.max(reach, nA.reach)), (comWide = Math.max(comWide, Math.abs(nA.x))));
+  for (; H.running && !H.coasting && !H.falling && HA.status === "running" && n < 240 * 90; n++) (every && n % every === 0 && tr.push([+(n / 240).toFixed(2), +(dir * (nA.z - ie.gateZ)).toFixed(1), +nA.x.toFixed(2), +nA.skiX.toFixed(2), +nA.vx.toFixed(1), AP.phase[0], AP.hold, +nA.edgeCmd.toFixed(2), +Math.max(-1.29, Math.min(1.29, nA.lean * 0.82 + nA.lay)).toFixed(2), +(nA.want || 0).toFixed(1), +nA.accelLat.toFixed(1), +nA.cast.toFixed(2), +nA.reach.toFixed(2), nA.slack ? +(1 + nA.loose).toFixed(2) : 0, +(nA.speed * 3.6).toFixed(0), Math.round(nA.tension), +(nA.drag / xe.mass).toFixed(1), +nA.sink.toFixed(2)]), Fg($n), HA.next >= 1 && HA.next <= 6 && (cN++, nA.loose > 0.03 && (sN++, (gap = Math.max(gap, nA.loose))), (vmin = Math.min(vmin, nA.speed)), (vmax = Math.max(vmax, nA.speed)), (tMax = Math.max(tMax, nA.tension))), (wide = Math.max(wide, Math.abs(nA.skiX))), (reach = Math.max(reach, nA.reach)), (comWide = Math.max(comWide, Math.abs(nA.x))));
   clearTimeout(bo);
-  return { status: HA.status, buoys: HA.buoys, msg: HA.messages[0] || nA.fallReason || "", t: +(n / 240).toFixed(1), wide: +wide.toFixed(2), com: +comWide.toFixed(2), reach: +reach.toFixed(2), slack: Math.round((100 * sN) / Math.max(1, cN)), gap: +gap.toFixed(2), v: [Math.round(vmin * 3.6), Math.round(vmax * 3.6)], T: Math.round(tMax), clear: HA.results.map((r) => +r.clearance.toFixed(2)) };
+  return { status: HA.status, buoys: HA.buoys, score: HA.score, msg: HA.messages[0] || nA.fallReason || "", t: +(n / 240).toFixed(1), wide: +wide.toFixed(2), com: +comWide.toFixed(2), reach: +reach.toFixed(2), slack: Math.round((100 * sN) / Math.max(1, cN)), gap: +gap.toFixed(2), v: [Math.round(vmin * 3.6), Math.round(vmax * 3.6)], T: Math.round(tMax), clear: HA.results.map((r) => +r.clearance.toFixed(2)) };
 };
 // ---- ski setup test rig --------------------------------------------------------------------
 // __ski(set): apply a setup ({len, depth, length, dft, wing, bind}; anything left out is stock)
@@ -10688,6 +10865,13 @@ window.__rig = (set, speed = 58, rope = 13, dir = 1) => {
   for (let k in o) o[k] = +o[k].toFixed(k === "T" || k === "rate" ? 0 : k[0] === "v" || k === "smear" ? 1 : 2);
   (nA.fallen && (o.fell = nA.fallReason), skiRide(keep));
   return o;
+};
+// test: make the skier fall now ("pop", "drag" or "wash"; hit = m/s of the snatch)
+window.__fall = (kind = "wash", hit = 5) => {
+  let p = nA.pylon(),
+    w = kind === "wash";
+  nA.fall(kind, "Test fall: " + kind, w ? nA.dir * Math.sign(nA.lean * 0.82 + (nA.lay || 0) || 1) : p.x - nA.x, w ? 0 : p.z - nA.z, w ? 0 : hit);
+  return { kind: nA.fallKind, dir: [+nA.fallDx.toFixed(2), +nA.fallDz.toFixed(2)], kmh: Math.round(nA.speed * 3.6) };
 };
 window.__noFail = () => {
   HA.update = () => null;
