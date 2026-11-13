@@ -4119,6 +4119,18 @@ var ze = { length: 259, spacing: 41, firstBuoy: 27, buoyOffset: 11.5, buoyRadius
     // over the front, toward the boat. Above snatchRip the handle is torn out of the hands
     // and flies off toward the boat, and the skier goes down where they are.
     snatchRip: 6.5,
+    // The speed along the rope is only part of the hit. When the line comes tight at short
+    // line it lies nearly square to the course, so the boat's speed down the course hardly
+    // shows along it; but the skier still has to be brought up to the boat's speed down the
+    // course in the next moments. A ski pointing down the lake is close to that speed already
+    // and is simply towed up to it. A ski pointing across has little speed down the course and
+    // the pull comes across it: that cannot be held. So a catch is also judged by how far the
+    // skier's speed down the course is short of the boat's (m/s): above snatchShort a fall,
+    // above snatchShortRip the handle is torn out. It counts in full once snatchSlack[1] m
+    // of line had been loose, and not at all below snatchSlack[0] (the arms take that up).
+    snatchShort: 11.5,
+    snatchShortRip: 14,
+    snatchSlack: [0.05, 0.2],
     ropeModel: "pendulum",
     swingDamp: 8,
     ropeBounce: 0,
@@ -4474,9 +4486,13 @@ var ho = class {
           // came tight (all of that has to be made up at once), and how much line had been loose
           ((this.snatch = sep), (this.snatchLoose = this.looseMax || 0), (this.snatchT = 0), (this.looseMax = 0));
           window.__hits && this === nA && window.__hits.push([+sep.toFixed(2), +this.snatchLoose.toFixed(2), +((this.boat.speed + this.vz * c) * 3.6).toFixed(0), +(this.speed * 3.6).toFixed(0), +this.x.toFixed(1)]);
-          if (e.exp && sep > e.snatchMax) {
-            let rip = sep > e.snatchRip,
-              how = this.snatchLoose.toFixed(1) + " m of loose line came tight with " + Math.round(sep * 3.6) + " km/h to make up";
+          // how far the skier is short of the boat down the course, counted by how loose the
+          // line really was
+          let short = Math.max(0, this.boat.speed + this.vz * c) * Math.max(0, Math.min(1, (this.snatchLoose - e.snatchSlack[0]) / (e.snatchSlack[1] - e.snatchSlack[0])));
+          this.snatchShort = short;
+          if (e.exp && (sep > e.snatchMax || short > e.snatchShort)) {
+            let rip = sep > e.snatchRip || short > e.snatchShortRip,
+              how = this.snatchLoose.toFixed(1) + " m of loose line came tight with the skier " + Math.round((this.boat.speed + this.vz * c) * 3.6) + " km/h slower than the boat";
             this.fall(rip ? "pop" : "drag", (rip ? "Handle torn out of the hands: " : "Pulled over the front: ") + how, t.x - this.x, t.z - this.z, sep);
             return;
           }
@@ -10960,6 +10976,25 @@ window.__fall = (kind = "wash", hit = 5) => {
     w = kind === "wash";
   nA.fall(kind, "Test fall: " + kind, w ? nA.dir * Math.sign(nA.lean * 0.82 + (nA.lay || 0) || 1) : p.x - nA.x, w ? 0 : p.z - nA.z, w ? 0 : hit);
   return { kind: nA.fallKind, dir: [+nA.fallDx.toFixed(2), +nA.fallDz.toFixed(2)], kmh: Math.round(nA.speed * 3.6) };
+};
+// test: a loose line coming tight. A copy of the skier is put wide of the boat (the rope
+// `ang` degrees off straight behind) on `loose` m of slack, moving at kmh with the ski pointing
+// `heading` degrees off the line of the course (0 = down the lake, 90 = straight across toward
+// the wakes). Returns what the catch did.
+window.__catch = (kmh = 30, heading = 45, loose = 0.4, ang = 65) => {
+  let s = apClone(),
+    b = s.boat,
+    c = s.dir,
+    v = kmh / 3.6,
+    h = heading / 57.3,
+    J = ang / 57.3;
+  b.speed = b.target;
+  let p = s.pylon(),
+    L = s.rope + xe.reachBase - loose;
+  Object.assign(s, { fallen: !1, fallReason: "", slack: !0, reach: xe.reachBase, loose, looseMax: loose, lean: 0, leanRate: 0, edge: 0, edgeCmd: 0, lay: 0, tension: 0, tensionDir: null });
+  ((s.x = p.x + L * Math.sin(J)), (s.z = p.z + c * L * Math.cos(J)), (s.vx = -v * Math.sin(h)), (s.vz = -c * v * Math.cos(h)), (s.speed = v));
+  for (let i = 0; i < 720 && s.slack && !s.fallen; i++) (s.step($n, 0), b.step($n, 0));
+  return { fell: s.fallen ? s.fallReason : "", along: +((s.snatch || 0) * 3.6).toFixed(0), short: +((s.snatchShort || 0) * 3.6).toFixed(0), loose: +(s.snatchLoose || 0).toFixed(2) };
 };
 window.__noFail = () => {
   HA.update = () => null;
