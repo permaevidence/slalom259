@@ -4107,6 +4107,12 @@ var ze = { length: 259, spacing: 41, firstBuoy: 27, buoyOffset: 11.5, buoyRadius
     leanC: 17,
     fallLean: 0.55,
     fallTime: 0.35,
+    // Default skiing: when a loose line comes tight, the skier has to be brought up to the
+    // boat's speed along the rope all at once, through the hands. Arms and rope give perhaps
+    // a quarter of a metre, so making up 3 m/s is a hard hit a good skier rides out, and by
+    // 5 m/s the load is several times body weight: the handle goes, or the skier with it.
+    // Above snatchMax (m/s) it is a fall.
+    snatchMax: 4.5,
     ropeModel: "pendulum",
     swingDamp: 8,
     ropeBounce: 0,
@@ -4453,10 +4459,20 @@ var ho = class {
         // in toward the hip and the rope stays straight. Only past that is the line truly loose.
         LA < P && ((this.reach = Math.max(e.reachMin, LA - this.rope, this.reach - e.reachGive * A)), (P = this.rope + this.reach));
         this.loose = Math.max(0, P - LA);
+        this.looseMax = Math.max(this.looseMax || 0, this.loose);
         // the boat takes the skier up again once it starts to pull away: with the arms having
         // followed the handle in, that happens with nothing to snap tight
         if (((this.ropeDist = LA), (this.tension = 0), (this.tensionDir = null), LA >= P - 1e-6 && sep >= 0)) {
           this.loose = 0;
+          // the hit: how fast the skier was dropping back from the boat along the line when it
+          // came tight (all of that has to be made up at once), and how much line had been loose
+          ((this.snatch = sep), (this.snatchLoose = this.looseMax || 0), (this.snatchT = 0), (this.looseMax = 0));
+          window.__hits && this === nA && window.__hits.push([+sep.toFixed(2), +this.snatchLoose.toFixed(2), +((this.boat.speed + this.vz * c) * 3.6).toFixed(0), +(this.speed * 3.6).toFixed(0), +this.x.toFixed(1)]);
+          if (e.exp && sep > e.snatchMax) {
+            ((this.fallen = !0), (this.state = "fallen"), (this.fallT = 0));
+            this.fallReason = "Slack hit too hard: " + this.snatchLoose.toFixed(1) + " m of loose line came tight with " + Math.round(sep * 3.6) + " km/h to make up";
+            return;
+          }
           let J = Math.atan2(iA, CA * c);
           ((this.theta = J),
             (this.omegaRope = ((this.vx - v) * Math.cos(J) - c * (this.vz - u) * Math.sin(J)) / P),
@@ -9690,7 +9706,10 @@ function apArcTest(b, dir, Tr, t0 = 0, e0 = Math.abs(nA.edgeCmd), plan = null) {
       },
       plan ? 4.3 : 3.5,
     );
-  if (!hit || c.fallen) return { cl: -99, lead: -99, gate: 99 };
+  if (!hit) return { cl: -99, lead: -99, gate: 99 };
+  // (a fall after the buoy is the slack hit: the plan got there too fast, which is the same
+  // warning as a loose rope, only louder)
+  c.fallen && (loose = 9);
   return { cl: sd * hit.skiX - ze.buoyOffset, lead: sd * hit.vx < 0 ? dir * (hit.pz - b.z) : -1 - 0.3 * sd * hit.vx, gate, Tr, loose };
 }
 // the input that walks the skier's edge setting toward a target, as light taps would
