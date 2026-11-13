@@ -78,6 +78,8 @@
   .setup .sinfo { margin-top:6px; font-size:10.5px; line-height:1.5; opacity:.7; text-align:left; }
   .setup .sreset { pointer-events:auto; margin-top:6px; padding:4px 10px; border-radius:8px; border:1px solid rgba(255,255,255,.18); background:rgba(255,255,255,.07); color:var(--ink); font-size:11px; }
   #setupChips { margin-top:8px; justify-content:flex-start; }
+  #skiChips { justify-content:flex-start; margin-bottom:10px; }
+  #skiChips .chip { padding:7px 10px; font-size:12px; }
   #skiModeChips, #autoChips { justify-content:flex-start; }
   #gateMenu { margin-top:8px; }
   .skisetup { margin:0 0 14px; text-align:left; border-radius:12px; border:1px solid rgba(255,255,255,.14); background:rgba(255,255,255,.05); }
@@ -148,6 +150,7 @@
     </div>
     <details class="skisetup" id="skiSetup">
       <summary><span class="sk-name">Ski setup</span><span class="sk-state"></span></summary>
+      <div class="chips" id="skiChips"></div>
       <div class="setup" id="setupMenu"></div>
       <div class="chips" id="setupChips"></div>
     </details>
@@ -4174,8 +4177,29 @@ function Pu(i) {
 // Real changes are thousandths of an inch, far too small for their geometry alone to matter in
 // a model this coarse, so each is weighted per "click" (SKI.gain) by how strongly skiers
 // report feeling it. Those weights are the calibration.
+// Ski models. Each has its maker's factory settings for a 67" (fin length, depth, distance
+// from tail, wing angle, front binding from the tail) and, as its own "stock", sits at the
+// balance its maker chose: the ratios are measured from there. What differs between hulls at
+// their factory settings is `hull`: a small offset (in logs, like everything in skiRide) to the
+// four ratios, read off how each maker describes the ski and off its width. The reference ski,
+// on which everything in xe was tuned, has none.
+//   D3 NEO 3            the reference
+//   HO Works 01         HO's 2027 factory chart. The aggressive one: holds angle and speed,
+//                       wants to be driven into the turn; 6.92" wide
+//   Goode XTR Pro       Goode's factory sheet. Narrow (about 6.55"), turns in with little
+//                       input and comes round fast; less under the skier at low speed
+//   Radar Vapor         Radar's Vapor chart (long/shallow, the setting it ships with; the 2027
+//                       chart was not out yet, so these are the 2026 numbers). Level and
+//                       stable, with a wider tail, and still easy to turn; 6.9" wide
 var SKI = {
-  stock: { len: 67, depth: 2.5, length: 6.85, dft: 0.77, wing: 8, bind: 29.5 },
+  models: {
+    neo3: { brand: "D3", name: "NEO 3", stock: { len: 67, depth: 2.5, length: 6.85, dft: 0.77, wing: 8, bind: 29.5 }, hull: {} },
+    works01: { brand: "HO", name: "Works 01", stock: { len: 67, depth: 2.46, length: 6.96, dft: 0.77, wing: 8, bind: 30 }, hull: { hold: 0.03, tip: -0.02, area: 0.013 } },
+    xtrpro: { brand: "Goode", name: "XTR Pro", stock: { len: 67, depth: 2.494, length: 6.768, dft: 0.705, wing: 9.5, bind: 29.125 }, hull: { hold: -0.02, tip: 0.03, area: -0.03 } },
+    vapor: { brand: "Radar", name: "Vapor", stock: { len: 67, depth: 2.46, length: 6.945, dft: 0.75, wing: 9, bind: 30 }, hull: { hold: 0.015, lever: 0.01, tip: 0.015, area: 0.01 } },
+  },
+  model: "neo3",
+  stock: null, // the chosen model's factory settings
   // size of one click of each setting
   click: { len: 1, depth: 0.01, length: 0.01, dft: 0.01, wing: 1, bind: 0.125 },
   gain: {
@@ -4189,8 +4213,16 @@ var SKI = {
   },
   set: null,
 };
+SKI.stock = SKI.models.neo3.stock;
+// choose a ski model: it starts at its factory settings
+function skiModel(id) {
+  SKI.models[id] || (id = "neo3");
+  ((SKI.model = id), (SKI.stock = SKI.models[id].stock));
+  return skiRide();
+}
 function skiRide(set) {
   let st = SKI.stock,
+    hull = SKI.models[SKI.model].hull,
     q = Object.assign({}, st, set || {}),
     g = SKI.gain,
     d = {},
@@ -4201,10 +4233,10 @@ function skiRide(set) {
     };
   for (let k in st) d[k] = (q[k] - st[k]) / SKI.click[k];
   q.wing > 0 || (d.wing = -st.wing); // no wing at all
-  let lnHold = sum(g.hold),
-    lnLever = sum(g.lever),
-    lnT = sum(g.tip),
-    lnA = sum(g.area),
+  let lnHold = sum(g.hold) + (hull.hold || 0),
+    lnLever = sum(g.lever) + (hull.lever || 0),
+    lnT = sum(g.tip) + (hull.tip || 0),
+    lnA = sum(g.area) + (hull.area || 0),
     lenK = q.len / st.len;
   SKI.set = q;
   return (xe.ride = {
@@ -8649,7 +8681,7 @@ var BODY = (() => {
 
 // ---- 45_firstperson.js ----
 // =============================================================================
-// First-person gear: sleeves, gloved hands, handle with bridle, D3 NEO III ski
+// First-person gear: sleeves, gloved hands, handle with bridle, the ski (four models)
 // (grip for a right-foot-forward skier: left palm up, right palm down)
 // =============================================================================
 // gear is built from explicit outward normals, so never let double-sided shading flip them
@@ -8783,36 +8815,205 @@ var GEAR = (() => {
     return g;
   }
 
-  // ---- D3 NEO III: black top sheet, big yellow D3 mark, white NEO III by the tip --------------
-  function skiTex() {
-    let W = 256,
-      L = 2048,
-      [c, g] = gfxCanvas(W, L);
-    ((g.fillStyle = "#0a0a0b"), g.fillRect(0, 0, W, L));
-    let along = (v, x, sx, draw) => {
-      // text runs along the ski, letters standing across it
-      (g.save(), g.translate(x, v * L), g.rotate(-Math.PI / 2), g.scale(sx, 1), draw(), g.restore());
+  // ---- the skis ---------------------------------------------------------------------------------
+  // Each model has its own outline (measured off a top view of the real ski: width as a
+  // fraction of the widest point, by distance from the tip as a fraction of the length), its
+  // own width, and its own top sheet. The top sheet is a canvas TW x TL with square pixels
+  // that covers the ski's bounding box: x across (0 = left edge at the widest point), y from
+  // the tip (0) to the tail (TL). It is drawn the way a product photo shows the ski, tip up.
+  let TW = 208,
+    TL = 2048,
+    // text running along the ski: turn = -1 reads from the tail toward the tip, +1 the other way
+    along = (g, x, y, turn, sx, draw) => {
+      (g.save(), g.translate(x, y), g.rotate((turn * Math.PI) / 2), g.scale(sx, 1), draw(), g.restore());
+    },
+    // a slot with round ends (roundRect is missing on older phones)
+    slot = (g, x, y, w, h) => {
+      (g.fillRect(x, y + w / 2, w, h - w), g.beginPath(), g.arc(x + w / 2, y + w / 2, w / 2, 0, 6.2832), g.arc(x + w / 2, y + h - w / 2, w / 2, 0, 6.2832), g.fill());
+    },
+    SKILOOK = {
+      // D3 NEO III: black top sheet, big yellow D3 mark, white NEO III by the tip. Widest
+      // (6.8" on a 67") from 30% to 45% back, then a long, nearly straight taper to a tail
+      // about 40% as wide.
+      neo3: {
+        half: 0.0855,
+        edge: 0x101010,
+        base: 0x0a0a0a,
+        out: [
+          [0, 0], [0.005, 0.333], [0.01, 0.394], [0.02, 0.495], [0.03, 0.576], [0.05, 0.687], [0.075, 0.778], [0.1, 0.84], [0.15, 0.919], [0.2, 0.96], [0.25, 0.983], [0.3, 1], [0.45, 1],
+          [0.5, 0.97], [0.55, 0.935], [0.6, 0.89], [0.65, 0.835], [0.7, 0.77], [0.75, 0.703], [0.8, 0.635], [0.85, 0.565], [0.9, 0.492], [0.95, 0.42], [0.98, 0.378], [0.99, 0.354], [0.995, 0.313], [1, 0.24],
+        ],
+        art(g) {
+          ((g.fillStyle = "#0a0a0b"), g.fillRect(0, 0, TW, TL));
+          ((g.textAlign = "center"), (g.textBaseline = "middle"));
+          along(g, 104, 0.375 * TL, -1, 3.05, () => {
+            g.font = "italic 900 185px 'Arial Black', Impact, Arial, sans-serif";
+            ((g.fillStyle = "#f3e03a"), g.fillText("D3", 0, 5));
+            ((g.lineWidth = 6), (g.strokeStyle = "#0a0a0b"), g.strokeText("D3", 0, 5));
+            ((g.lineWidth = 2), (g.strokeStyle = "#f3e03a"), g.strokeText("D3", -9, 10));
+          });
+          along(g, 136, 0.085 * TL, -1, 1.25, () => {
+            ((g.font = "900 44px Impact, 'Arial Narrow', Arial, sans-serif"), (g.fillStyle = "#f2f2f0"), g.fillText("NEO III", 0, 0));
+          });
+          ((g.fillStyle = "#e8e8e4"), g.fillRect(122, 0.665 * TL, 40, 88), (g.fillStyle = "#777"));
+          for (let k = 0; k < 9; k++) g.fillRect(126, 0.665 * TL + 8 + k * 9, 32, 3);
+          along(g, 76, 0.8 * TL, -1, 1, () => {
+            ((g.font = "700 12px Arial, sans-serif"), (g.fillStyle = "#f3e03a"), g.fillText("MADE IN THE USA", 0, 0));
+          });
+        },
+      },
+      // HO Syndicate Works 01 (2027): all red, with fine tone-on-tone contour lines, a fan of
+      // pale lines through the middle and a small SYNDICATE by the tip. 66.92" x 6.92".
+      works01: {
+        half: 0.0879,
+        edge: 0x1a1113,
+        base: 0xa3262c,
+        out: [
+          [0, 0], [0.005, 0.22], [0.01, 0.37], [0.02, 0.456], [0.03, 0.516], [0.05, 0.636], [0.075, 0.737], [0.1, 0.8], [0.15, 0.885], [0.2, 0.945], [0.25, 0.976], [0.3, 0.99], [0.35, 1], [0.4, 0.995],
+          [0.45, 0.98], [0.5, 0.96], [0.55, 0.931], [0.6, 0.887], [0.65, 0.821], [0.7, 0.752], [0.75, 0.683], [0.8, 0.621], [0.85, 0.555], [0.9, 0.486], [0.95, 0.41], [0.98, 0.361], [0.99, 0.344], [0.995, 0.3], [1, 0.23],
+        ],
+        art(g) {
+          let gr = g.createLinearGradient(0, 0, 0, TL);
+          (gr.addColorStop(0, "#e63d44"), gr.addColorStop(0.55, "#dc3a41"), gr.addColorStop(1, "#cf343b"));
+          ((g.fillStyle = gr), g.fillRect(0, 0, TW, TL));
+          // tone-on-tone contours, like a relief map, over the whole top
+          g.lineWidth = 1;
+          for (let k = 0; k < 46; k++) {
+            g.strokeStyle = k % 2 ? "rgba(140,22,30,0.34)" : "rgba(255,150,140,0.2)";
+            g.beginPath();
+            for (let y = 0; y <= TL; y += 16) {
+              let x = -40 + k * 6.5 + 46 * Math.sin(y * 0.0031 + k * 0.21) + 18 * Math.sin(y * 0.0083 - k * 0.4);
+              y ? g.lineTo(x, y) : g.moveTo(x, y);
+            }
+            g.stroke();
+          }
+          // the fan of pale lines sweeping across the middle of the ski
+          g.lineWidth = 1.3;
+          for (let k = 0; k < 15; k++) {
+            g.strokeStyle = "rgba(255,196,160," + (0.5 - k * 0.022).toFixed(3) + ")";
+            (g.beginPath(), g.moveTo(-10, 0.47 * TL + k * 7), g.bezierCurveTo(70, 0.5 * TL + k * 16, 150 - k * 3, 0.58 * TL + k * 26, 70 + k * 5, 0.86 * TL), g.stroke());
+          }
+          ((g.textAlign = "center"), (g.textBaseline = "middle"));
+          along(g, 128, 0.17 * TL, 1, 1, () => {
+            ((g.font = "300 34px 'Helvetica Neue', Arial, sans-serif"), (g.fillStyle = "rgba(120,16,24,0.9)"), g.fillText("SYNDICATE", 0, 0));
+          });
+          along(g, 96, 0.118 * TL, 1, 1, () => {
+            ((g.font = "700 15px 'Helvetica Neue', Arial, sans-serif"), (g.fillStyle = "rgba(120,16,24,0.9)"), g.fillText("WORKS 01", 0, 0));
+          });
+          ((g.font = "700 9px Arial, sans-serif"), (g.fillStyle = "rgba(255,225,215,0.8)"));
+          (g.fillText("HANDCRAFTED", 104, 0.845 * TL), g.fillText("SEATTLE, WA", 104, 0.845 * TL + 12));
+          ((g.fillStyle = "#f1ebe6"), g.fillRect(92, 0.872 * TL, 24, 9));
+          // the fin block's slot through the top
+          ((g.fillStyle = "#111"), slot(g, 98, 0.895 * TL, 12, 150));
+        },
+      },
+      // Goode XTR Pro (2027, orange): bare carbon weave, a big white GOODE by the tip with XTR
+      // PRO beside it, an orange slash across the middle and orange chevrons down the tail.
+      // The narrowest of the four: about 6.55" on a 67".
+      xtrpro: {
+        half: 0.0832,
+        edge: 0x0c0c0d,
+        base: 0x121214,
+        out: [
+          [0, 0], [0.005, 0.244], [0.01, 0.324], [0.02, 0.428], [0.03, 0.499], [0.05, 0.623], [0.075, 0.731], [0.1, 0.814], [0.15, 0.897], [0.2, 0.945], [0.25, 0.982], [0.3, 1], [0.35, 0.995], [0.4, 0.979],
+          [0.45, 0.961], [0.5, 0.943], [0.55, 0.917], [0.6, 0.88], [0.65, 0.837], [0.7, 0.777], [0.75, 0.71], [0.8, 0.641], [0.85, 0.568], [0.9, 0.492], [0.95, 0.411], [0.98, 0.354], [0.99, 0.333], [0.995, 0.283], [1, 0.22],
+        ],
+        art(g) {
+          ((g.fillStyle = "#1b1b1e"), g.fillRect(0, 0, TW, TL));
+          // the carbon weave: fine diagonals, a little lighter than the ground
+          ((g.lineWidth = 3), (g.strokeStyle = "rgba(255,255,255,0.055)"));
+          for (let y = -TW; y < TL + TW; y += 9) (g.beginPath(), g.moveTo(0, y + TW * 0.8), g.lineTo(TW, y), g.stroke());
+          let OR = "#f25f2f",
+            slash = (y0, h) => {
+              // a band across the ski, higher on the right than on the left
+              (g.beginPath(), g.moveTo(0, y0 + 200), g.lineTo(TW, y0), g.lineTo(TW, y0 + h), g.lineTo(0, y0 + h + 230), g.closePath(), g.fill());
+            };
+          g.fillStyle = OR;
+          (slash(0.335 * TL, 30), slash(0.368 * TL, 285));
+          // the orange block carries the weave too
+          ((g.lineWidth = 3), (g.strokeStyle = "rgba(120,30,0,0.16)"));
+          for (let y = 0.3 * TL; y < 0.66 * TL; y += 9) (g.beginPath(), g.moveTo(0, y + TW * 0.8), g.lineTo(TW, y), g.stroke());
+          ((g.fillStyle = "#1b1b1e"), g.fillRect(103, 0.52 * TL, 2, 0.19 * TL));
+          ((g.textAlign = "center"), (g.textBaseline = "middle"));
+          along(g, 92, 0.205 * TL, -1, 1, () => {
+            ((g.font = "900 78px 'Arial Black', 'Helvetica Neue', Arial, sans-serif"), (g.fillStyle = "#f4f4f2"), g.fillText("GOODE", 0, 0));
+          });
+          along(g, 150, 0.172 * TL, -1, 1, () => {
+            g.font = "italic 800 30px 'Helvetica Neue', Arial, sans-serif";
+            ((g.textAlign = "right"), (g.fillStyle = OR), g.fillText("XTR", -3, 0), (g.textAlign = "left"), (g.fillStyle = "#f4f4f2"), g.fillText("PRO", 3, 0));
+          });
+          // the G roundel
+          let gy = 0.772 * TL;
+          ((g.strokeStyle = "#f4f4f2"), (g.lineWidth = 4), g.beginPath(), g.arc(104, gy, 17, 0, 6.2832), g.stroke());
+          ((g.textAlign = "center"), (g.font = "900 22px 'Arial Black', Arial, sans-serif"), (g.fillStyle = "#f4f4f2"), g.fillText("G", 104, gy + 1));
+          // chevrons down the tail, each a little narrower than the one before
+          ((g.strokeStyle = OR), (g.lineWidth = 3.5));
+          for (let k = 0; k < 6; k++) {
+            let y = (0.805 + k * 0.027) * TL,
+              w = 46 - k * 5;
+            (g.beginPath(), g.moveTo(104 - w, y), g.lineTo(104, y + w * 0.85), g.lineTo(104 + w, y), g.stroke());
+          }
+        },
+      },
+      // Radar Vapor Pro Build (2027, cloud white): white, a paler stripe down the middle with a
+      // ghosted RADAR in it, grey flanks boxed in by thin black lines between the feet, VAPOR
+      // by the tip. 6.9" on a 67"; fuller in the tail than the others.
+      vapor: {
+        half: 0.0876,
+        edge: 0x111214,
+        base: 0x141416,
+        out: [
+          [0, 0], [0.005, 0.377], [0.01, 0.449], [0.02, 0.522], [0.03, 0.591], [0.05, 0.698], [0.075, 0.786], [0.1, 0.849], [0.15, 0.927], [0.2, 0.962], [0.25, 0.981], [0.3, 0.99], [0.4, 1], [0.45, 0.99],
+          [0.5, 0.962], [0.55, 0.925], [0.6, 0.874], [0.65, 0.811], [0.7, 0.748], [0.75, 0.682], [0.8, 0.621], [0.85, 0.553], [0.9, 0.482], [0.95, 0.409], [0.98, 0.365], [0.99, 0.348], [0.995, 0.306], [1, 0.24],
+        ],
+        art(g) {
+          ((g.fillStyle = "#e9ebee"), g.fillRect(0, 0, TW, TL));
+          let a = 0.27 * TL, // where the lines leave the edges
+            b = 0.315 * TL, // and reach the stripe
+            c = 0.665 * TL,
+            d = 0.725 * TL,
+            xl = 76,
+            xr = 132;
+          // grey flanks between the feet
+          g.fillStyle = "#b9bfc3";
+          (g.beginPath(), g.moveTo(0, a), g.lineTo(xl, b), g.lineTo(xl, c), g.lineTo(0, d), g.closePath(), g.fill());
+          (g.beginPath(), g.moveTo(TW, a), g.lineTo(xr, b), g.lineTo(xr, c), g.lineTo(TW, d), g.closePath(), g.fill());
+          // the pale stripe down the middle, from the tip to behind the back foot
+          ((g.fillStyle = "#f7f8f9"), g.fillRect(xl, 0, xr - xl, c));
+          (g.beginPath(), g.moveTo(xl, c), g.lineTo(104, c + 62), g.lineTo(xr, c), g.closePath(), g.fill());
+          // RADAR ghosted into the forebody
+          ((g.textAlign = "center"), (g.textBaseline = "middle"));
+          along(g, 104, 0.15 * TL, 1, 1.5, () => {
+            ((g.font = "900 78px 'Arial Black', 'Helvetica Neue', Arial, sans-serif"), (g.fillStyle = "rgba(150,156,162,0.3)"), g.fillText("RADAR", 0, 0));
+          });
+          along(g, 116, 0.165 * TL, 1, 1, () => {
+            ((g.font = "800 26px 'Helvetica Neue', Arial, sans-serif"), (g.fillStyle = "#17181a"), g.fillText("VAPOR", 0, 0));
+          });
+          // the thin black lines that box the flanks in, and the chevron behind them
+          ((g.strokeStyle = "#1a1b1d"), (g.lineWidth = 3), (g.lineJoin = "miter"));
+          (g.beginPath(), g.moveTo(0, a), g.lineTo(xl, b), g.lineTo(xl, c), g.lineTo(0, d), g.stroke());
+          (g.beginPath(), g.moveTo(TW, a), g.lineTo(xr, b), g.lineTo(xr, c), g.lineTo(TW, d), g.stroke());
+          (g.beginPath(), g.moveTo(40, d + 24), g.lineTo(104, d - 34), g.lineTo(168, d + 24), g.stroke());
+          // binding inserts
+          g.fillStyle = "#3a3c40";
+          for (let y of [0.36, 0.42, 0.48, 0.56, 0.62]) for (let x of [58, 150]) (g.beginPath(), g.arc(x, y * TL, 2.2, 0, 6.2832), g.fill());
+          // the roundel, the label and the fin block's slot
+          let ry = 0.815 * TL;
+          ((g.strokeStyle = "#1a1b1d"), (g.lineWidth = 2.5), g.beginPath(), g.arc(104, ry, 12, 0, 6.2832), g.stroke());
+          ((g.font = "900 14px 'Arial Black', Arial, sans-serif"), (g.fillStyle = "#1a1b1d"), g.fillText("R", 104, ry + 1));
+          ((g.fillStyle = "#1a1b1d"), g.fillRect(93, 0.838 * TL, 22, 12));
+          (slot(g, 98, 0.868 * TL, 12, 190));
+        },
+      },
     };
-    ((g.textAlign = "center"), (g.textBaseline = "middle"));
-    along(0.375, 128, 3.05, () => {
-      g.font = "italic 900 228px 'Arial Black', Impact, Arial, sans-serif";
-      ((g.fillStyle = "#f3e03a"), g.fillText("D3", 0, 6));
-      ((g.lineWidth = 7), (g.strokeStyle = "#0a0a0b"), g.strokeText("D3", 0, 6));
-      ((g.lineWidth = 2.5), (g.strokeStyle = "#f3e03a"), g.strokeText("D3", -9, 12));
-    });
-    along(0.085, 176, 1.25, () => {
-      ((g.font = "900 62px Impact, 'Arial Narrow', Arial, sans-serif"), (g.fillStyle = "#f2f2f0"), g.fillText("NEO III", 0, 0));
-    });
-    ((g.fillStyle = "#e8e8e4"), g.fillRect(150, 0.665 * L, 58, 88), (g.fillStyle = "#777"));
-    for (let k = 0; k < 9; k++) g.fillRect(156, 0.665 * L + 8 + k * 9, 46, 3);
-    along(0.8, 62, 1, () => {
-      ((g.font = "700 15px Arial, sans-serif"), (g.fillStyle = "#f3e03a"), g.fillText("MADE IN THE USA", 0, 0));
-    });
+  function skiTex(look) {
+    let [c, g] = gfxCanvas(TW, TL);
+    look.art(g);
     let t = new CanvasTex_(c);
     ((t.flipY = !1), (t.colorSpace = K_.SRGB), (t.anisotropy = 16));
     return t;
   }
-  function skiGeo() {
+  function skiGeo(look) {
     // stations along the ski, tip first. The nose rounds off over the first 7.5% of the
     // length: it gets closely spaced stations, so the very tip reads as round instead of the
     // point two straight facets used to make.
@@ -8820,15 +9021,9 @@ var GEAR = (() => {
     for (let k = 0; k < 10; k++) ts.push(0.075 * (1 - Math.cos((k / 10) * 1.5708)));
     for (let k = 0; k <= 36; k++) ts.push(0.075 + (0.9 * k) / 36);
     ts.push(0.985, 0.992, 0.997, 1); // the rounded corners of the tail
-    // Outline measured off a top view of the D3 NEO III: width as a fraction of the widest
-    // point, by distance from the tip as a fraction of the length. Widest (6.8" on a 67") from
-    // 30% to 45% back, then a long, nearly straight taper to a tail about 40% as wide.
-    let OUT = [
-        [0, 0], [0.005, 0.333], [0.01, 0.394], [0.02, 0.495], [0.03, 0.576], [0.05, 0.687], [0.075, 0.778], [0.1, 0.84], [0.15, 0.919], [0.2, 0.96], [0.25, 0.983], [0.3, 1], [0.45, 1],
-        [0.5, 0.97], [0.55, 0.935], [0.6, 0.89], [0.65, 0.835], [0.7, 0.77], [0.75, 0.703], [0.8, 0.635], [0.85, 0.565], [0.9, 0.492], [0.95, 0.42], [0.98, 0.378], [0.99, 0.354], [0.995, 0.313], [1, 0.24],
-      ],
+    let OUT = look.out,
       outline = (t) => {
-        if (t < 0.005) return 0.333 * Math.sqrt(t / 0.005);
+        if (t < 0.005) return OUT[1][1] * Math.sqrt(t / 0.005);
         let k = 1;
         while (k < OUT.length - 1 && OUT[k][0] < t) k++;
         let [t0, w0] = OUT[k - 1],
@@ -8838,12 +9033,12 @@ var GEAR = (() => {
     let N = ts.length - 1,
       top = new GeoB_(),
       body = new GeoB_(),
-      EDGE = new Color_(1052688),
-      BASE = new Color_(657930),
+      EDGE = new Color_(look.edge),
+      BASE = new Color_(look.base),
       st = [];
     for (let k = 0; k <= N; k++) {
       let t = ts[k],
-        w = Math.max(0.0005, 0.0855 * outline(t)),
+        w = Math.max(0.0005, look.half * outline(t)),
         y = 0.105 * Math.pow(Math.max(0, 1 - t / 0.2), 2.2) + 0.012 * Math.pow(Math.max(0, (t - 0.8) / 0.2), 2),
         th = 0.007 + 0.016 * Math.pow(Math.sin(Math.min(1, t * 1.05) * Math.PI), 0.6);
       st.push({ t, z: -0.86 + 1.68 * t, w, y, th });
@@ -8852,7 +9047,9 @@ var GEAR = (() => {
       let s = st[k],
         bev = Math.min(0.007, s.w * 0.4);
       for (let sd of [-1, 1]) {
-        top.vert([sd * (s.w - bev), s.y + s.th, s.z], [0, 1, 0], sd < 0 ? 0 : 1, s.t, ONE);
+        // the top sheet is laid flat over the ski's bounding box, so its art is not squeezed
+        // where the ski narrows
+        top.vert([sd * (s.w - bev), s.y + s.th, s.z], [0, 1, 0], 0.5 + (sd * 0.5 * (s.w - bev)) / look.half, s.t, ONE);
         body.vert([sd * (s.w - bev), s.y + s.th, s.z], [sd * 0.5, 0.86, 0], 0, 0, EDGE);
         body.vert([sd * s.w, s.y + s.th * 0.4, s.z], [sd, 0.15, 0], 0, 0, EDGE);
         body.vert([sd * s.w * 0.96, s.y, s.z], [sd * 0.4, -0.9, 0], 0, 0, BASE);
@@ -8867,12 +9064,19 @@ var GEAR = (() => {
     }
     return [top.build(), body.build()];
   }
-  function skiGroup() {
-    let g = new Group_(),
-      [tg, bg] = skiGeo();
-    add(tg, gfxNoFlip(new PhysMat_({ map: skiTex(), vertexColors: !0, roughness: 0.16, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.05, side: K_.Double })), g);
+  // (re)build the ski in its group for a model: the group itself stays, so whatever holds it
+  // (the skier's trim pivot) is untouched
+  function skiBuild(g, id) {
+    let look = SKILOOK[id] || SKILOOK.neo3;
+    for (let m of [...g.children]) (g.remove(m), m.geometry.dispose(), m.material.map && m.material.map.dispose(), m.material.dispose());
+    let [tg, bg] = skiGeo(look);
+    add(tg, gfxNoFlip(new PhysMat_({ map: skiTex(look), vertexColors: !0, roughness: 0.16, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.05, side: K_.Double })), g);
     add(bg, gfxNoFlip(new StdMat_({ vertexColors: !0, roughness: 0.3, metalness: 0.1, side: K_.Double })), g);
+    g.userData.model = id;
     return g;
+  }
+  function skiGroup() {
+    return skiBuild(new Group_(), SKI.model);
   }
 
   // ---- assemble ---------------------------------------------------------------------------------
@@ -9084,7 +9288,7 @@ var GEAR = (() => {
     (handle.matrix.makeBasis(b, n, t2).setPosition(p), (handle.matrixWorldNeedsUpdate = !0));
     return apex.copy(p).addScaledVector(r, handle.userData.apex + 0.04);
   }
-  let G = { handsOff: !1, hands: null, handsW: 0, fist: 0, fwd: new V3_(0, 0, -1), update, freeHandle, ski, handle, sides, shift, torso, legs, feet, head, dbg: null };
+  let G = { handsOff: !1, hands: null, handsW: 0, fist: 0, fwd: new V3_(0, 0, -1), update, freeHandle, setSki: (id) => skiBuild(ski, id), ski, handle, sides, shift, torso, legs, feet, head, dbg: null };
   return G;
 })();
 
@@ -10137,6 +10341,9 @@ try {
   // ?mode=experimental (or normal) picks the skiing model for the session
   let md = i.get("mode");
   md && skiMode(md !== "legacy"); // ?mode=legacy for the older skiing; anything else is the default
+  // ?ski=works01 (or xtrpro, vapor, neo3) picks the ski model for the session
+  let sk = i.get("ski");
+  sk && SKI.models[sk] && skiModel(sk);
   // ?setup=depth:2.47,bind:29.75 skis the whole session on that setup (for trying one by hand)
   let su = i.get("setup");
   if (su) {
@@ -10248,11 +10455,15 @@ var SETUP = (() => {
   let ROWS = [
       ["len", "Ski length", 1, 64, 70, 0, '"'],
       ["depth", "Fin depth", 0.005, 2.4, 2.6, 3, '"'],
-      ["length", "Fin length", 0.005, 6.7, 7, 3, '"'],
-      ["dft", "Fin from tail", 0.005, 0.68, 0.86, 3, '"'],
-      ["wing", "Wing angle", 1, 5, 12, 0, "\xB0"],
-      ["bind", "Front binding", 0.125, 28.5, 30.75, 3, '"'],
+      ["length", "Fin length", 0.005, 6.6, 7.1, 3, '"'],
+      ["dft", "Fin from tail", 0.005, 0.66, 0.86, 3, '"'],
+      ["wing", "Wing angle", 0.5, 5, 12, 1, "\xB0"],
+      ["bind", "Front binding", 0.125, 28.5, 31, 3, '"'],
     ],
+    // the ski models, in the order they are offered
+    MODELS = ["neo3", "works01", "xtrpro", "vapor"],
+    modelName = (id) => SKI.models[id].brand + " " + SKI.models[id].name,
+    SKIKEY = "slalom259.ski",
     // the skier's gate: key in qe, name, step, how to show it
     GATE = [
       ["pullBoat", "Pull-out start", 1, (v) => (v >= 0 ? v + " m early" : -v + " m late")],
@@ -10284,16 +10495,45 @@ var SETUP = (() => {
       }
     },
     isStock = () => ROWS.every(([k]) => SKI.set[k] === SKI.stock[k]),
-    show = (k, v, dec, unit) => (k === "wing" && !(v > 0) ? "none" : v.toFixed(dec) + unit);
+    show = (k, v, dec, unit) => (k === "wing" ? (v > 0 ? +v.toFixed(1) + unit : "none") : v.toFixed(dec) + unit),
+    // a changed setup is remembered per model (the first model keeps the old key)
+    setupKey = () => (SKI.model === "neo3" ? KEY : KEY + "." + SKI.model);
   function apply(set) {
-    (skiRide(set), store(KEY, isStock() ? null : JSON.stringify(SKI.set)), render());
+    (skiRide(set), store(setupKey(), isStock() ? null : JSON.stringify(SKI.set)), render());
+  }
+  // the setup left from last time on this model, if any
+  function savedSetup() {
+    let saved = read(setupKey()),
+      q = {};
+    if (saved)
+      try {
+        let o = JSON.parse(saved);
+        for (let [k] of ROWS) isFinite(+o[k]) && (q[k] = +o[k]);
+      } catch {}
+    return q;
+  }
+  // choose a ski model: its factory settings, or the setup last left on it
+  function setSki(id) {
+    SKI.models[id] || (id = "neo3");
+    (skiModel(id), skiRide(savedSetup()), store(SKIKEY, id === "neo3" ? null : id));
+    (GEAR.setSki(id), skiChips(), render());
+    return id;
+  }
+  function skiChips() {
+    let el = document.getElementById("skiChips");
+    if (!el) return;
+    el.innerHTML = "";
+    for (let id of MODELS) {
+      let c = document.createElement("div");
+      ((c.className = "chip" + (SKI.model === id ? " on" : "")), (c.textContent = modelName(id)), (c.onclick = () => setSki(id)), el.appendChild(c));
+    }
   }
   function nudge(row, dir) {
     let [k, , step, lo, hi] = row,
       v = SKI.set[k],
       n;
     // the wing can also come off altogether: one step below its smallest angle
-    if (k === "wing") n = v > 0 ? (v + dir < lo ? 0 : Math.min(hi, v + dir)) : dir > 0 ? lo : 0;
+    if (k === "wing") n = v > 0 ? (v + dir * step < lo ? 0 : Math.min(hi, v + dir * step)) : dir > 0 ? lo : 0;
     else n = Math.max(lo, Math.min(hi, +(Math.round((v + dir * step) / step) * step).toFixed(4)));
     apply(Object.assign({}, SKI.set, { [k]: n }));
   }
@@ -10303,7 +10543,7 @@ var SETUP = (() => {
     (gateSave(), render());
   }
   function word(bal) {
-    return bal > 1.03 ? "looser than stock: turns in quicker, tail slides more, less width" : bal < 0.97 ? "more locked than stock: holds and carries speed, runs wider and later" : "stock balance";
+    return bal > 1.03 ? "loose: turns in quicker, tail slides more, less width" : bal < 0.97 ? "locked: holds and carries speed, runs wider and later" : "balanced";
   }
   // one stepper row: name, minus, value, plus
   function row(h, name, text, mod, title, step) {
@@ -10335,7 +10575,7 @@ var SETUP = (() => {
       bal = r.tip / (r.hold * r.lever);
     for (let rw of ROWS) {
       let [k, name, , , , dec, unit] = rw;
-      row(h, name, show(k, SKI.set[k], dec, unit), SKI.set[k] !== SKI.stock[k], "stock " + show(k, SKI.stock[k], dec, unit), (dir) => nudge(rw, dir));
+      row(h, name, show(k, SKI.set[k], dec, unit), SKI.set[k] !== SKI.stock[k], "factory " + show(k, SKI.stock[k], dec, unit), (dir) => nudge(rw, dir));
     }
     line(h, "sinfo", "Tail hold \xD7" + (r.hold * r.lever).toFixed(2) + " \xB7 tip \xD7" + r.tip.toFixed(2) + " \xB7 balance " + bal.toFixed(2) + " (" + word(bal) + ")");
   }
@@ -10353,16 +10593,16 @@ var SETUP = (() => {
   function render() {
     let menu = document.getElementById("setupMenu"),
       gate = document.getElementById("gateMenu");
-    if (menu) ((menu.innerHTML = ""), skiRows(menu), resetBtn(menu, "Reset to stock", isStock(), () => apply()));
+    if (menu) ((menu.innerHTML = ""), skiRows(menu), resetBtn(menu, "Reset to factory", isStock(), () => apply()));
     if (gate) ((gate.innerHTML = ""), gateRows(gate), resetBtn(gate, "Reset gate", gateStock(), resetGate));
     if (panel) {
       panel.innerHTML = "";
-      (line(panel, "stitle", "Ski setup"), skiRows(panel));
+      (line(panel, "stitle", modelName(SKI.model)), skiRows(panel));
       H.autopilot && ((line(panel, "stitle", "Autopilot: gate").style.marginTop = "8px"), gateRows(panel));
       resetBtn(panel, "Reset all", isStock() && (gateStock() || !H.autopilot), () => (H.autopilot && (Object.assign(qe, gate0()), store(GKEY, null)), apply()));
     }
     let st = document.querySelector("#skiSetup .sk-state");
-    st && ((st.textContent = isStock() ? "stock" : "custom"), (st.className = "sk-state" + (isStock() ? "" : " mod")));
+    st && ((st.textContent = modelName(SKI.model) + " \xB7 " + (isStock() ? "factory" : "custom")), (st.className = "sk-state" + (isStock() ? "" : " mod")));
     let sum = document.querySelector("#settings summary"),
       tags = [];
     (xe.exp || tags.push("legacy skiing"), H.autopilot && tags.push("autopilot demo" + (gateStock() ? "" : ", custom gate")));
@@ -10401,16 +10641,14 @@ var SETUP = (() => {
   try {
     fromUrl = new URLSearchParams(location.search).has("setup");
   } catch {}
-  if (!fromUrl) {
-    let saved = read(KEY);
-    if (saved)
-      try {
-        let o = JSON.parse(saved),
-          q = {};
-        for (let [k] of ROWS) isFinite(+o[k]) && (q[k] = +o[k]);
-        skiRide(q);
-      } catch {}
-  }
+  // the ski model: the one in the address, else the one left from last time
+  let urlSki = !1;
+  try {
+    urlSki = new URLSearchParams(location.search).has("ski");
+  } catch {}
+  urlSki || fromUrl || skiModel(read(SKIKEY) || "neo3");
+  fromUrl || skiRide(savedSetup());
+  GEAR.setSki(SKI.model);
   // ---- the skiing model: Default, or Legacy (the older one, kept for comparison) -------------
   // In the code the default model is still flagged xe.exp ("experimental", as it began) and
   // the legacy one is what the comments call "normal".
@@ -10458,8 +10696,8 @@ var SETUP = (() => {
         for (let [k] of GATE) isFinite(+o[k]) && (qe[k] = gateClamp(k, +o[k]));
       } catch {}
   }
-  (render(), panelChips(), modeChips(), autoChips());
-  return { render, apply, modeChips, setMode, autoChips };
+  (render(), panelChips(), modeChips(), autoChips(), skiChips());
+  return { render, apply, modeChips, setMode, autoChips, setSki };
 })();
 
 
@@ -10916,6 +11154,7 @@ window.__simPass = (dir, speed, rope, auto = !0, human) => {
 // __ski(set): apply a setup ({len, depth, length, dft, wing, bind}; anything left out is stock)
 // and return the ratios it produces.
 window.__mode = (exp) => (exp === void 0 || SETUP.setMode(!!exp), xe.exp ? "default" : "legacy");
+window.__skiModel = (id) => (id === void 0 || SETUP.setSki(id), SKI.model); // choose a ski model
 window.__SKI = SKI; // stock, click sizes and the per-click weights, for tuning from the console
 window.__ski = (set) => {
   let r = skiRide(set),
