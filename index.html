@@ -8367,7 +8367,7 @@ var BODY = (() => {
         }),
       );
     hb.loft(hr, WHITE, { cap1: WHITE });
-    addMesh(hb.build(), gfxNoFlip(new StdMat_({ map: hairTex(), vertexColors: !0, roughness: 0.82, metalness: 0, side: K_.Double })), g);
+    addMesh(hb.build(), gfxNoFlip(new PhysMat_({ map: hairTex(), vertexColors: !0, roughness: 0.6, metalness: 0, clearcoat: 0.35, clearcoatRoughness: 0.35, side: K_.Double })), g);
     // neck, set toward the back of the skull
     b.loft(
       [
@@ -9084,14 +9084,15 @@ var GEAR = (() => {
     gOpenGeo = gloveGeo(!0),
     artGeo = gloveArtGeo(),
     artMat = new StdMat_({ map: gloveArt(), transparent: !0, alphaTest: 0.2, roughness: 0.6, side: K_.Double, polygonOffset: !0, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
-    // skin: a soft sheen at grazing angles keeps it from reading as plastic
+    // skin: a soft sheen at grazing angles keeps it from reading as plastic. (No clear coat
+    // for "wet": it darkened the skin and mirrored the sky, which read as polished bronze.)
     skinMat = gfxNoFlip(new PhysMat_({ vertexColors: !0, roughness: 0.52, metalness: 0, sheen: 0.3, sheenRoughness: 0.6, sheenColor: new Color_(0xd98a68), side: K_.Double })),
     upperGeo = BODY.upperGeo,
     foreGeo = BODY.foreGeo,
     shoulderGeo = BODY.shoulderGeo,
     torso = (() => {
       // unit-height trunk: hips at y = 0, shoulder line at y = 1, x to the skier's right
-      let m = add(BODY.torsoGeo(), gfxNoFlip(new StdMat_({ map: BODY.torsoTex(), vertexColors: !0, roughness: 0.62, metalness: 0, side: K_.Double })), le);
+      let m = add(BODY.torsoGeo(), gfxNoFlip(new PhysMat_({ map: BODY.torsoTex(), vertexColors: !0, roughness: 0.6, metalness: 0, clearcoat: 0.4, clearcoatRoughness: 0.4, side: K_.Double })), le);
       m.matrixAutoUpdate = !1;
       return m;
     })(),
@@ -9216,7 +9217,10 @@ var GEAR = (() => {
       // there, and G.fist which one, if any, is clenched.)
       let free = !G.handsOff && fs && s === fs,
         wFree = G.handsOff ? 1 : free ? Math.min(1, ease * 3) : 0,
-        loose = G.handsOff ? G.fist !== s : free && ease > 0.45;
+        // (a real true or false: the renderer hides a mesh only when visible is exactly
+        // false, and "free" is 0, not false, when both hands are on the handle. With 0 here
+        // the open hand was drawn on top of the gripping one: ten fingers.)
+        loose = !!(G.handsOff ? G.fist !== s : free && ease > 0.45);
       ((q.grip.visible = !loose), (q.open.visible = loose));
       G.handsOff && G.hands && hp.lerp(G.hands[s < 0 ? 0 : 1], G.handsW);
       if (free) {
@@ -9462,7 +9466,7 @@ var FX = (() => {
           vec2 vv = (mat3(viewMatrix) * aVel).xy;
           float sp = length(vv);
           vec2 along = sp > 0.05 ? vv / sp : vec2(0.0, 1.0);
-          float stretch = 1.0 + min(sp * 0.085, 1.6) * (2.0 - step(1.0, aDat.z)); // drops streak more than mist
+          float stretch = 1.0 + min(sp * 0.1, 1.9) * (2.0 - step(1.0, aDat.z)); // drops streak more than mist
           mv.xy += (vec2(along.y, -along.x) * position.x + along * position.y * stretch) * sz;
           gl_Position = projectionMatrix * mv;
           float d = length(mv.xyz);
@@ -9491,7 +9495,10 @@ var FX = (() => {
           float n = texture2D(uNoise, vUv * vec2(0.9, 0.5) + vSeed).b;
           float a = f * f * vK.x * mix(smoothstep(0.34, 0.70, n) * 1.9, 0.45 + 0.75 * smoothstep(0.15, 0.85, n), vMist);
           if (a < 0.004) discard;
-          vec3 c = mix(uFogCol, uColor * vK.y, vK.z);
+          // thrown water is not all white: where it is still whole it keeps the colour of
+          // water, and only where it has broken up into air and drops does it go white
+          float w = mix(smoothstep(0.42, 0.85, n), 0.6 + 0.4 * n, vMist);
+          vec3 c = mix(uFogCol, uColor * mix(vec3(0.66, 0.79, 0.87), vec3(1.0), w) * vK.y, vK.z);
           gl_FragColor = vec4(c * a, a);
         }`,
     }),
@@ -9526,13 +9533,14 @@ var FX = (() => {
   }
   function reset() {
     for (let i = 0; i < N; i++) ((life[i] = 0), (aPos[i * 3 + 1] = -100), (aDat[i * 4 + 1] = 0));
-    ((accSki = 0), (accBoat = 0), (pA.needsUpdate = !0), (dA.needsUpdate = !0));
+    ((accSki = 0), (accBoil = 0), (accBoat = 0), (pA.needsUpdate = !0), (dA.needsUpdate = !0), SHEET.reset());
   }
   let accSki = 0,
+    accBoil = 0,
     accBoat = 0,
     R = Math.random;
   // the wall of water a slalom ski throws off its edge, plus the little rooster off the tail
-  function skier(dt, sk, dir, foot, tail) {
+  function skier(dt, sk, dir, foot, tail, t = 0) {
     if (sk.fallen || sk.speed < 3) return 0;
     let sp = sk.speed,
       // spray follows the load on the ski, not its angle: the unloaded ski of the pre-turn
@@ -9545,7 +9553,8 @@ var FX = (() => {
     // A ski always throws a fine sheet off its edge and tail, even running flat; under load it
     // becomes the wall. Mostly small fast drops laid down along the ski's edge with one common
     // direction (a sheet), with a little soft mist among them.
-    accSki = Math.min(accSki + dt * (650 + 5200 * I * I) * Math.min(1, sp / 9), 140);
+    accSki = Math.min(accSki + dt * (650 + 6800 * I * I) * Math.min(1, sp / 9), 170);
+    SHEET.add(foot ? (foot.x + tail.x) * 0.5 : x0, foot ? (foot.z + tail.z) * 0.5 : z0, t, I, side, sp, dir);
     for (; accSki >= 1; accSki -= 1) {
       // along the ski's own line, from under the front foot back to the tail
       let f = R(),
@@ -9553,13 +9562,139 @@ var FX = (() => {
         z = foot ? foot.z + (tail.z - foot.z) * f : z0 + (0.1 + f * 0.95) * dir,
         pw = 0.45 + 0.55 * R(),
         fan = 0.75 + 0.5 * R();
-      if (R() > 0.1 + 0.34 * Math.min(1, I * 2.5))
+      if (R() > 0.06 + 0.13 * Math.min(1, I * 2.5))
         emit(x, 0.04, z, side * (1.6 + 8.5 * I) * pw * fan + (R() - 0.5) * 0.4, (1.1 + 7.5 * I) * pw + R() * 0.4, -dir * sp * 0.1 * R() + (R() - 0.5) * 0.7, 0.24 + 0.3 * R() + 0.22 * I, 0.018 + 0.026 * R(), 0.4, 0.9, 0.3);
       else
-        emit(x, 0.03, z, side * (1.1 + 6.6 * I) * pw * fan + (R() - 0.5) * 0.5, (0.8 + 6.0 * I) * pw, -dir * sp * 0.08 * R() + (R() - 0.5) * 0.8, 0.24 + (0.18 + 0.42 * I) * R(), 0.05 + (0.04 + 0.12 * I) * R(), 1.6 + 1.3 * I, 0.2 + 0.16 * I, 1.4);
+        emit(x, 0.03, z, side * (1.1 + 6.6 * I) * pw * fan + (R() - 0.5) * 0.5, (0.8 + 6.0 * I) * pw, -dir * sp * 0.08 * R() + (R() - 0.5) * 0.8, 0.24 + (0.18 + 0.42 * I) * R(), 0.05 + (0.04 + 0.12 * I) * R(), 1.6 + 1.3 * I, 0.15 + 0.1 * I, 1.4);
+    }
+    // the white water the ski pushes up round itself where it cuts the surface: a low boil
+    // along both sides from under the front foot to the tail, more of it on the loaded side
+    accBoil = Math.min(accBoil + dt * (160 + 420 * I) * Math.min(1, sp / 8), 30);
+    for (; accBoil >= 1; accBoil -= 1) {
+      let f = R(),
+        sd = R() < 0.72 ? side : -side,
+        x = (foot ? foot.x + (tail.x - foot.x) * f : x0) + sd * (0.05 + 0.07 * R()),
+        z = foot ? foot.z + (tail.z - foot.z) * f : z0 + (0.1 + f * 0.95) * dir;
+      emit(x, 0.02, z, sd * (0.3 + 1.1 * R()), 0.35 + 0.9 * R() + 0.6 * I, -dir * sp * 0.06 * R(), 0.16 + 0.2 * R(), 0.05 + 0.06 * R(), 1.5, 0.3, 2.2);
     }
     return I;
   }
+  // ---- the sheet -------------------------------------------------------------------------
+  // What the edge of a loaded ski throws up is, to begin with, one unbroken film of water: a
+  // glassy fan that leaves the ski whole and only tears into streaks and drops as it flies.
+  // The particles are the drops; this is the film. It is a surface swept out behind the ski:
+  // each moment the ski lays down a line of water with a spread of speeds (slow at the foot of
+  // the fan, fast at its top), and each of those lines then flies on its own, as the drops do.
+  var SHEET = (() => {
+    let SN = 110, // moments kept
+      SR = 6, // points up the fan
+      LIFE = 0.62,
+      sx = new Float32Array(SN),
+      sz = new Float32Array(SN),
+      st = new Float32Array(SN),
+      sI = new Float32Array(SN),
+      sSide = new Float32Array(SN),
+      sBack = new Float32Array(SN),
+      sS = new Float32Array(SN), // distance along the path, for the grain of the film
+      count = 0,
+      sHead = 0,
+      pos = new Float32Array(SN * SR * 3),
+      dat = new Float32Array(SN * SR * 4), // along the path (m), up the fan 0..1, age 0..1, load
+      idx = [];
+    for (let i = 0; i < SN - 1; i++)
+      for (let r = 0; r < SR - 1; r++) {
+        let a = i * SR + r,
+          b = a + SR;
+        idx.push(a, a + 1, b, a + 1, b + 1, b);
+      }
+    let g = new Geo_(),
+      posA = new Attr_(pos, 3),
+      datA = new Attr_(dat, 4);
+    (posA.setUsage(K_.Dynamic), datA.setUsage(K_.Dynamic));
+    (g.setAttribute("position", posA), g.setAttribute("aDat", datA), g.setIndex(idx), g.setDrawRange(0, 0));
+    let m = new ShaderMat_({
+        transparent: !0,
+        depthWrite: !1,
+        premultipliedAlpha: !0,
+        fog: !1,
+        side: K_.Double,
+        uniforms: { uColor: { value: lit }, uNoise: { value: TEX.noise }, uSunDir: { value: ATM.sunDir }, uFogCol: { value: ATM.fogCol }, uFogDensity: { value: ATM.fogDensity } },
+        vertexShader: `
+          attribute vec4 aDat;
+          uniform vec3 uSunDir;
+          uniform float uFogDensity;
+          varying vec4 vDat;
+          varying vec3 vK; // glow, fog transmittance, fade close to the lens
+          void main() {
+            vDat = aDat;
+            vec4 mv = viewMatrix * vec4(position, 1.0);
+            gl_Position = projectionMatrix * mv;
+            float d = length(mv.xyz);
+            vec3 vd = normalize(position - cameraPosition);
+            vK = vec3(1.0 + 1.3 * pow(max(dot(vd, uSunDir), 0.0), 5.0), exp(-uFogDensity * uFogDensity * d * d), smoothstep(0.3, 1.3, d));
+          }`,
+        fragmentShader: `
+          uniform vec3 uColor, uFogCol;
+          uniform sampler2D uNoise;
+          varying vec4 vDat;
+          varying vec3 vK;
+          void main() {
+            float up = vDat.y, age = vDat.z;
+            // the grain runs up the fan, the way the water was thrown: fine across the path,
+            // long up the throw
+            float n = texture2D(uNoise, vec2(vDat.x * 1.9, up * 0.3 + age * 0.15)).b * 0.6 + texture2D(uNoise, vec2(vDat.x * 6.1 + 0.37, up * 0.8 - age * 0.25)).g * 0.4;
+            // whole at the ski; it tears from the top down as it flies
+            float th = mix(-0.25, 0.72, smoothstep(0.03, 1.0, age + 0.3 * up * age));
+            float a = smoothstep(th, th + 0.22, n);
+            a *= smoothstep(1.0, 0.72, up) * smoothstep(0.0, 0.1, up + age * 2.0); // feathered top
+            a *= 1.0 - smoothstep(0.6, 1.0, age);
+            a *= smoothstep(0.1, 0.5, vDat.w) * vK.z;
+            // a film of water is half see-through and keeps its colour; where it has torn it
+            // is full of air and goes white
+            float white = clamp(smoothstep(0.1, 0.75, age) * 0.75 + (n - 0.45) * 0.9, 0.0, 1.0);
+            a *= mix(0.5, 0.92, white);
+            if (a < 0.004) discard;
+            vec3 c = mix(uFogCol, uColor * mix(vec3(0.6, 0.76, 0.85), vec3(1.0), white) * vK.x, vK.y);
+            gl_FragColor = vec4(c * a, a);
+          }`,
+      }),
+      sheet = new Mesh_(g, m);
+    ((sheet.frustumCulled = !1), (sheet.renderOrder = 5), gfxNoReflect(sheet), le.add(sheet));
+    function add(x, z, t, I, side, sp, dir) {
+      let l = (sHead - 1 + SN) % SN;
+      if (count && t - st[l] < 0.011) return;
+      // a new edge, or a gap in time: the film does not join across it
+      let join = count && t - st[l] < 0.1 && sSide[l] === side;
+      ((sx[sHead] = x), (sz[sHead] = z), (st[sHead] = t), (sI[sHead] = join ? I : 0), (sSide[sHead] = side), (sBack[sHead] = -dir * sp * 0.05));
+      sS[sHead] = join ? sS[l] + Math.hypot(x - sx[l], z - sz[l]) : 0;
+      ((sHead = (sHead + 1) % SN), (count = Math.min(SN, count + 1)));
+    }
+    function update(t) {
+      let n = 0;
+      for (let k = 0; k < count; k++) {
+        let i = (sHead - 1 - k + SN * 2) % SN,
+          tau = t - st[i];
+        if (tau >= LIFE || tau < 0) break;
+        let I = sI[i],
+          U = 1.6 + 8.5 * I,
+          V = 1.1 + 7.5 * I;
+        for (let r = 0; r < SR; r++) {
+          let up = r / (SR - 1),
+            pw = 0.18 + 0.82 * up,
+            o = (n * SR + r) * 3,
+            q = (n * SR + r) * 4;
+          ((pos[o] = sx[i] + sSide[i] * U * pw * tau), (pos[o + 1] = Math.max(0.02, 0.04 + V * pw * tau - 4.905 * tau * tau)), (pos[o + 2] = sz[i] + sBack[i] * tau));
+          ((dat[q] = sS[i]), (dat[q + 1] = up), (dat[q + 2] = tau / LIFE), (dat[q + 3] = I));
+        }
+        n++;
+      }
+      (g.setDrawRange(0, Math.max(0, n - 1) * (SR - 1) * 6), (posA.needsUpdate = !0), (datA.needsUpdate = !0));
+    }
+    function reset() {
+      ((count = 0), (sHead = 0), g.setDrawRange(0, 0));
+    }
+    return { add, update, reset };
+  })();
   // prop churn behind the transom and the sheets of spray peeling off the chines
   function boat(dt, bz, speed, dir) {
     let F = Math.max(0, Math.min(1, (speed - 2.5) / 8));
@@ -9576,7 +9711,7 @@ var FX = (() => {
       }
     }
   }
-  return { update, reset, skier, boat, emit, mesh, stats: () => { let n = 0; for (let i = 0; i < N; i++) life[i] > 0 && n++; return n; } };
+  return { update, reset, skier, boat, emit, mesh, sheet: SHEET, stats: () => { let n = 0; for (let i = 0; i < N; i++) life[i] > 0 && n++; return n; } };
 })();
 
 // ---- foam ribbon the ski leaves on the surface -------------------------------
@@ -9591,7 +9726,7 @@ var TRAIL = (() => {
     count = 0,
     head = 0,
     pos = new Float32Array(N * 2 * 3),
-    dat = new Float32Array(N * 2 * 2), // across (-1..1), opacity
+    dat = new Float32Array(N * 2 * 4), // across (m), age (s), strength, which side the spray went (+1 / -1)
     idx = [];
   for (let i = 0; i < N - 1; i++) {
     let a = i * 2;
@@ -9599,7 +9734,7 @@ var TRAIL = (() => {
   }
   let geo = new Geo_(),
     posA = new Attr_(pos, 3),
-    datA = new Attr_(dat, 2);
+    datA = new Attr_(dat, 4);
   (posA.setUsage(K_.Dynamic), datA.setUsage(K_.Dynamic));
   (geo.setAttribute("position", posA), geo.setAttribute("aDat", datA), geo.setIndex(idx), geo.setDrawRange(0, 0));
   let lit = new Color_().copy(ATM.sunCol).multiplyScalar(1.05 * ATM.sunDir.y);
@@ -9615,8 +9750,8 @@ var TRAIL = (() => {
       polygonOffsetUnits: -2,
       uniforms: { uFoam: { value: TEX.foam }, uColor: { value: lit }, uFogCol: { value: ATM.fogCol }, uFogDensity: { value: ATM.fogDensity } },
       vertexShader: `
-        attribute vec2 aDat;
-        varying vec2 vDat;
+        attribute vec4 aDat;
+        varying vec4 vDat;
         varying vec3 vW;
         void main() {
           vDat = aDat;
@@ -9627,16 +9762,28 @@ var TRAIL = (() => {
         uniform sampler2D uFoam;
         uniform vec3 uColor, uFogCol;
         uniform float uFogDensity;
-        varying vec2 vDat;
+        varying vec4 vDat;
         varying vec3 vW;
         void main() {
-          // dense down the middle, feathering to lace at the edges; the pattern is fine enough
-          // to show inside a strip a metre wide
-          float edge = pow(smoothstep(0.0, 0.75, 1.0 - abs(vDat.x)), 1.4);
-          float amt = vDat.y * edge;
+          // m = metres across the track; ms = the same, counted toward the side the spray went
+          float m = vDat.x, age = vDat.y, s = vDat.z, ms = vDat.x * vDat.w;
           float pat = mix(texture2D(uFoam, vW.xz * 0.9).r, texture2D(uFoam, vW.xz * 2.7 + 0.4).r, 0.5);
-          // amt above 1 is unbroken white; below that the foam pattern eats holes into it
+          // 1. the churned strip off the tail: as wide as the tail where it leaves it, solid
+          // white for a few metres, then spreading a little, breaking into lace and all but
+          // gone inside two seconds (it lasts longer where the ski was loaded and dug more up)
+          float wc = 0.045 + 0.07 * smoothstep(0.0, 0.8, age) + 0.11 * s * smoothstep(0.0, 0.6, age);
+          float amt = (1.0 - smoothstep(wc * 0.35, wc, abs(m))) * 1.55 * exp(-age / (0.35 + 0.35 * s));
           float a = smoothstep(1.05 - amt, 1.45 - amt, pat) * 0.95;
+          // 2. where the wall of spray comes down beside the track a moment later: a broad
+          // patch of fine white, like heavy rain on the water, that dies away quickly
+          float lo = 0.7 + 0.9 * s, hi = 1.8 + 5.2 * s;
+          float fall = smoothstep(lo - 0.5, lo + 0.5, ms) * (1.0 - smoothstep(hi * 0.55, hi, ms))
+                     * smoothstep(0.3, 0.75, age) * (1.0 - smoothstep(1.0, 2.4, age)) * smoothstep(0.3, 0.75, s) * 0.8;
+          // (a fine net of white, never a solid patch: from far off it melts into the water)
+          float fine = mix(texture2D(uFoam, vW.xz * 3.1 + 0.6).r, texture2D(uFoam, vW.xz * 6.3 + 0.2).r, 0.5);
+          a = max(a, smoothstep(0.5, 0.85, fine) * fall * 0.6);
+          // 3. the smoothed line the ski leaves in the water, faint, after the foam has gone
+          a = max(a, (1.0 - smoothstep(0.1, 0.32, abs(m))) * 0.13 * smoothstep(0.3, 1.5, age) * (1.0 - smoothstep(3.0, 8.0, age)));
           if (a < 0.004) discard;
           float d = length(vW - cameraPosition);
           vec3 c = mix(uFogCol, uColor, exp(-uFogDensity * uFogDensity * d * d));
@@ -9652,8 +9799,7 @@ var TRAIL = (() => {
   // away from the one before, it is left where it is and a new one starts. (It used to be
   // compared with itself, so at 60 fps it was dragged along for ever and the trail was only
   // laid down above about 80 km/h.)
-  let STEP = 0.4,
-    TAIL_W = 0.034 / 0.55;
+  let STEP = 0.4;
   function add(x, z, t, strength, side) {
     if (count >= 2) {
       let l = (head - 1 + N) % N,
@@ -9678,20 +9824,18 @@ var TRAIL = (() => {
         nx = -dz / l,
         nz = dx / l,
         s = ps[i],
-        // a solid white strip off the tail that spreads, then breaks up into lace and fades:
-        // narrow when the ski runs flat, broad where the wall of spray came down beside it
-        // It leaves the tail exactly as wide as the tail (about 7 cm: the ribbon is a little
-        // over twice that, because its edges feather away) and opens out behind it.
-        w = TAIL_W + 0.46 * Math.sqrt(Math.min(1, a * 6)) + a * 0.45 + s * 0.95 * Math.min(1, a * 5),
-        off = pd[i] * s * 0.55 * Math.min(1, a * 6),
-        cx = px[i] + off,
-        sm_ = Math.min(1, a / 0.3),
-        op = (1.3 + 0.25 * s - (0.72 - 0.14 * s) * sm_ * sm_ * (3 - 2 * sm_)) * (1 - Math.pow(a, 2.2)),
+        // The ribbon is only the ground the foam is drawn on: wide enough either side of the
+        // track to reach where the spray lands. What is white on it, and for how long, is
+        // worked out in the shader from the distance across, the age and the load. It is the
+        // same both sides, with the side the spray went carried separately, so nothing in it
+        // jumps where the ski changes edge.
+        sd = nx * pd[i] >= 0 ? 1 : -1,
+        ext = 0.6 + 7.2 * s,
         o = n * 6;
-      ((pos[o] = cx - nx * w), (pos[o + 1] = 0.012), (pos[o + 2] = pz[i] - nz * w));
-      ((pos[o + 3] = cx + nx * w), (pos[o + 4] = 0.012), (pos[o + 5] = pz[i] + nz * w));
-      let q = n * 4;
-      ((dat[q] = -1), (dat[q + 1] = op), (dat[q + 2] = 1), (dat[q + 3] = op));
+      ((pos[o] = px[i] - nx * ext), (pos[o + 1] = 0.012), (pos[o + 2] = pz[i] - nz * ext));
+      ((pos[o + 3] = px[i] + nx * ext), (pos[o + 4] = 0.012), (pos[o + 5] = pz[i] + nz * ext));
+      let q = n * 8;
+      ((dat[q] = -ext), (dat[q + 1] = a * LIFE), (dat[q + 2] = s), (dat[q + 3] = sd), (dat[q + 4] = ext), (dat[q + 5] = a * LIFE), (dat[q + 6] = s), (dat[q + 7] = sd));
       n++;
     }
     (geo.setDrawRange(0, Math.max(0, n - 1) * 6), (posA.needsUpdate = !0), (datA.needsUpdate = !0));
@@ -10929,9 +11073,9 @@ function Xg(i, A) {
   let skiOn = !!dt.userData.trim,
     tailW = skiOn ? GEAR.ski.localToWorld(new V3_(0, 0, 0.815)) : new V3_(a, 0, c + 0.75 * dir),
     footW = skiOn ? GEAR.ski.localToWorld(new V3_(0, 0, -0.12)) : new V3_(a, 0, c + 0.1 * dir);
-  let sprayI = FX.skier(i, nA, dir, footW, tailW);
+  let sprayI = FX.skier(i, nA, dir, footW, tailW, A);
   FX.boat(i, we.z, we.speed, dir);
-  FX.update(i);
+  (FX.update(i), FX.sheet.update(A));
   if (!nA.fallen && nA.speed > 3) TRAIL.add(tailW.x, tailW.z, A, 0.12 + 0.88 * sprayI, -Math.sign(nA.accelLat || nA.edge || 1) * dir);
   TRAIL.update(A);
 
