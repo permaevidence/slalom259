@@ -8889,7 +8889,7 @@ var GEAR = (() => {
 // ---- view: first person (default) or the chase camera -------------------------------------------
 // Players always get first person. The chase camera is a testing aid: it is picked in the
 // Settings section of the start screen, and only then does the V key switch views.
-var VIEW = { mode: "fp", eye: new V3_(), ready: !1, headParts: [], test: !1, neck: 0.25, neckLay: 0.5, near: 0.04 };
+var VIEW = { mode: "fp", eye: new V3_(), ready: !1, headParts: [], test: !1, neck: 0.25, neckLay: 0.5, near: 0.04, hipBend: 0.3 }; // hipBend: share of a turn's lean the upper body does not take
 try {
   localStorage.getItem("slalom259.view") === "chase" && ((VIEW.mode = "chase"), (VIEW.test = !0));
 } catch {}
@@ -10327,6 +10327,25 @@ function Xg(i, A) {
   let p = dt.userData.shoulders,
     bodyUp = new V3_(0, 1, 0).applyQuaternion(dt.quaternion),
     chest = dt.localToWorld(new V3_(p.x, p.y, p.z)),
+    pelvisW = dt.localToWorld(new V3_(0, BODY.K.hipY, BODY.K.hipZ));
+  // Leaning in for a turn the body is not one straight plank: the legs and hips go in with
+  // the ski and the upper body stays more upright over them (it bends at the hips). Leaning
+  // away from the boat in the pull it is one straight line again. Which of the two it is
+  // shows in where the lean points: toward the pylon in the turn, away from it in the pull.
+  // From here on bodyUp and chest are the upper body's; legs and ski keep the full lean.
+  {
+    let sl = Math.hypot(bodyUp.x, bodyUp.z),
+      bx = o.x - pelvisW.x,
+      bz = o.z - pelvisW.z,
+      toward = sl > 1e-3 ? (bodyUp.x * bx + bodyUp.z * bz) / (sl * (Math.hypot(bx, bz) || 1)) : 0,
+      angT = nA.fallen ? 0 : VIEW.hipBend * Math.max(0, Math.min(1, (toward + 0.1) / 0.5)) * Math.max(0, Math.min(1, (Math.asin(Math.min(1, sl)) - 0.15) / 0.4));
+    VIEW.ang = (VIEW.ang || 0) + (angT - (VIEW.ang || 0)) * Math.min(1, i * 8);
+    if (VIEW.ang > 1e-3 && sl > 1e-3) {
+      let q = dt.quaternion.clone().setFromAxisAngle(new V3_(-bodyUp.z, 0, bodyUp.x).normalize(), Math.acos(Math.max(-1, Math.min(1, bodyUp.y))) * VIEW.ang);
+      (bodyUp.applyQuaternion(q), chest.sub(pelvisW).applyQuaternion(q).add(pelvisW));
+    }
+  }
+  let
     // the head is carried upright over the shoulders however far the body leans: a short neck
     // along the spine, then straight up
     // The head is carried nearly upright, but it leans a quarter of the way with the spine.
@@ -10365,7 +10384,7 @@ function Xg(i, A) {
   let sagT = nA.fallen ? 0 : Math.min(0.045 * I, (0.6 * I * I) / (8 * Math.max(nA.tension, 1)));
   VIEW.sag = (VIEW.sag || 0) + (sagT - (VIEW.sag || 0)) * Math.min(1, i * (sagT > (VIEW.sag || 0) ? 4.5 : 16));
   // (the handle's own triangle hangs the way the rope leaves it)
-  let apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, dt.localToWorld(new V3_(0, BODY.K.hipY, BODY.K.hipZ)), reachAmt, i, dir > 0 ? 0 : Math.PI, headUp, ropeLeave(VIEW.leave || (VIEW.leave = new V3_()), hc, o, Q, VIEW.sag));
+  let apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, pelvisW, reachAmt, i, dir > 0 ? 0 : Math.PI, headUp, ropeLeave(VIEW.leave || (VIEW.leave = new V3_()), hc, o, Q, VIEW.sag));
   Tg(apex, o, Q, VIEW.sag);
 
   // spray, churn and the ski's foam trail
