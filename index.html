@@ -8657,7 +8657,8 @@ var GEAR = (() => {
   // ---- glove, modelled gripping a bar that runs along x through the origin -------------------
   // +y is the back of the hand, +z runs toward the wrist. Built as the palm-down hand; the
   // palm-up hand is the same mesh mirrored in y.
-  function gloveGeo() {
+  // open = the same hand holding nothing: fingers loosely out, a little curled, thumb aside
+  function gloveGeo(open = !1) {
     let b = new GeoB_(),
       fx = [-0.0345, -0.0115, 0.0115, 0.0345],
       len = [0.94, 1.0, 0.97, 0.86];
@@ -8666,9 +8667,9 @@ var GEAR = (() => {
         L = len[k],
         wr = [x * 0.74, 0.031, 0.108],
         mcp = [x, 0.037, 0.008],
-        pip = [x, 0.017, -0.012 - 0.019 * L],
-        dip = [x, -0.019, -0.008 - 0.017 * L],
-        tip = [x * 0.98, -0.031, 0.006];
+        pip = open ? [x * 1.06, 0.032, -0.004 - 0.036 * L] : [x, 0.017, -0.012 - 0.019 * L],
+        dip = open ? [x * 1.1, 0.021, -0.006 - 0.06 * L] : [x, -0.019, -0.008 - 0.017 * L],
+        tip = open ? [x * 1.12, 0.006, -0.008 - 0.078 * L] : [x * 0.98, -0.031, 0.006];
       // padded back of the hand, then the finger curling over the bar and back underneath
       (b.ball(wr, 0.0125, NEO, 8, 4), b.chain([wr, mcp], [0.0125, 0.0128], NEO));
       b.chain([mcp, pip, dip, tip], [0.0128, 0.0112, 0.0104, 0.0094], BLACK);
@@ -8681,12 +8682,19 @@ var GEAR = (() => {
     b.quad(P(0.046, 0.012, 0.012), P(0.036, 0.012, 0.112), P(0.034, 0.034, 0.112), P(0.047, 0.036, 0.012), PALM, null, [1, 0, 0]);
     // thumb wraps under the bar from the inside edge of the hand
     b.chain(
-      [
-        [-0.034, 0.022, 0.082],
-        [-0.055, 0.008, 0.04],
-        [-0.052, -0.02, 0.008],
-        [-0.03, -0.031, -0.008],
-      ],
+      open
+        ? [
+            [-0.034, 0.022, 0.082],
+            [-0.058, 0.02, 0.052],
+            [-0.071, 0.016, 0.026],
+            [-0.078, 0.01, 0.004],
+          ]
+        : [
+            [-0.034, 0.022, 0.082],
+            [-0.055, 0.008, 0.04],
+            [-0.052, -0.02, 0.008],
+            [-0.03, -0.031, -0.008],
+          ],
       [0.015, 0.0135, 0.0118, 0.0102],
       BLACK,
     );
@@ -8831,6 +8839,7 @@ var GEAR = (() => {
 
   // ---- assemble ---------------------------------------------------------------------------------
   let gGeo = gloveGeo(),
+    gOpenGeo = gloveGeo(!0),
     artGeo = gloveArtGeo(),
     artMat = new StdMat_({ map: gloveArt(), transparent: !0, alphaTest: 0.2, roughness: 0.6, side: K_.Double, polygonOffset: !0, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
     // skin: a soft sheen at grazing angles keeps it from reading as plastic
@@ -8857,10 +8866,12 @@ var GEAR = (() => {
     ski = skiGroup(),
     sides = [-1, 1].map((s) => {
       let glove = new Group_();
-      (add(gGeo, neoprene, glove), add(artGeo, artMat, glove).castShadow = !1);
+      let grip = add(gGeo, neoprene, glove),
+        open = add(gOpenGeo, neoprene, glove);
+      ((open.visible = !1), (add(artGeo, artMat, glove).castShadow = !1));
       glove.matrixAutoUpdate = !1;
       le.add(glove);
-      return { s, glove, upper: add(upperGeo, skinMat, le), fore: add(foreGeo, skinMat, le), cap: add(shoulderGeo, skinMat, le) };
+      return { s, glove, grip, open, upper: add(upperGeo, skinMat, le), fore: add(foreGeo, skinMat, le), cap: add(shoulderGeo, skinMat, le) };
     });
   le.add(handle);
   let r = new V3_(),
@@ -8899,6 +8910,7 @@ var GEAR = (() => {
   // on as soon as the turn starts to finish (it used to drift back on a long fading curve and
   // then snap the last few centimetres)
   let grab = { g: 0, side: 0, out: !1, prev: 0 };
+  let SKEW = 0.5; // rad the hand can lie askew across the bar
   // leave = unit direction in which the rope leaves the handle (null: straight at the pylon)
   function update(chest, sr, hc, pylon, bodyUp, freeSide, pelvis, reachAmt = 0, dt = 1 / 60, faceYaw = 0, headUp = Y, leave = null) {
     // the head sits on the neck and tips with it; the face keeps looking down the course
@@ -8957,8 +8969,11 @@ var GEAR = (() => {
         over = s > 0; // right hand palm down, left hand palm up
       (S.copy(cs).addScaledVector(srT, s * 0.195), q.cap.position.copy(S));
       hp.copy(hc).addScaledVector(b, s * GRIP);
+      // (G.handsOff: after a fall, with the handle gone, neither hand is holding anything)
       let free = fs && s === fs,
-        wFree = free ? Math.min(1, ease * 3) : 0;
+        wFree = G.handsOff ? 1 : free ? Math.min(1, ease * 3) : 0,
+        loose = G.handsOff || (free && ease > 0.45);
+      ((q.grip.visible = !loose), (q.open.visible = loose));
       if (free) {
         // the hand that let go trails out to the side and a little behind, for balance: a
         // long, loose, nearly straight arm. It swings there and back round the shoulder at
@@ -8975,7 +8990,14 @@ var GEAR = (() => {
       El.copy(S);
       for (let it = 0; it < 3; it++) {
         (zp.subVectors(El, hp), t2.copy(zp).normalize(), zp.addScaledVector(b, -zp.dot(b)).normalize());
-        wFree && zp.lerp(t2, wFree).normalize();
+        // The wrist stays straight: under a hard pull it cannot be anything else. What gives
+        // is the grip. The hand pivots where it holds the bar, lying a little askew across it,
+        // so that it carries straight on into the forearm (up to SKEW; a hand cannot lie
+        // further across a bar than that, and only then does the wrist take the rest).
+        {
+          let dv = Math.acos(Math.max(-1, Math.min(1, zp.dot(t2))));
+          zp.lerp(t2, wFree >= 1 || dv < 1e-4 ? 1 : Math.max(wFree, Math.min(1, SKEW / dv))).normalize();
+        }
         xb.copy(b).addScaledVector(zp, -b.dot(zp)).normalize();
         yh.crossVectors(zp, xb).normalize();
         over || yh.negate();
@@ -8997,7 +9019,7 @@ var GEAR = (() => {
       }
       (q.glove.matrix.makeBasis(xb, yh, zp).setPosition(hp), (q.glove.matrixWorldNeedsUpdate = !0));
       (limb(q.upper, S, El), limb(q.fore, El, W));
-      q.dbg = { S: S.toArray(), El: El.toArray(), W: W.toArray(), hp: hp.toArray() };
+      q.dbg = { S: S.toArray(), El: El.toArray(), W: W.toArray(), hp: hp.toArray(), skew: Math.asin(Math.max(-1, Math.min(1, t2.copy(El).sub(hp).normalize().dot(b)))) };
     }
     return apex;
   }
@@ -9010,7 +9032,7 @@ var GEAR = (() => {
     (handle.matrix.makeBasis(b, n, t2).setPosition(p), (handle.matrixWorldNeedsUpdate = !0));
     return apex.copy(p).addScaledVector(r, handle.userData.apex + 0.04);
   }
-  let G = { update, freeHandle, ski, handle, sides, shift, torso, legs, feet, head, dbg: null };
+  let G = { handsOff: !1, update, freeHandle, ski, handle, sides, shift, torso, legs, feet, head, dbg: null };
   return G;
 })();
 
@@ -10559,6 +10581,7 @@ function Xg(i, A) {
   // all in the pull. It droops gently and snaps straight quickly, as a real line does.
   let sagT = nA.fallen ? 0 : Math.min(0.045 * I, (0.6 * I * I) / (8 * Math.max(nA.tension, 1)));
   VIEW.sag = (VIEW.sag || 0) + (sagT - (VIEW.sag || 0)) * Math.min(1, i * (sagT > (VIEW.sag || 0) ? 4.5 : 16));
+  GEAR.handsOff = !!(nA.fallen && nA.hdl);
   // (the handle's own triangle hangs the way the rope leaves it)
   let apex = GEAR.update(chest, sr, hc, o, bodyUp, freeHand, pelvisW, reachAmt, i, dir > 0 ? 0 : Math.PI, headUp, ropeLeave(VIEW.leave || (VIEW.leave = new V3_()), hc, o, Q, VIEW.sag));
   // (once the hands have let go, the handle is wherever the line has taken it)
