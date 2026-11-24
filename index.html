@@ -6366,10 +6366,12 @@ var WAKE_GLSL =
   float wakeAlive(float s) { return uBoat.w * (1.0 - smoothstep(uBoat.z - 16.0, uBoat.z - 1.0, s)); }
   // the stretch behind the boat drawn by the wake mesh (out to 150 m; beyond that the wake is
   // under 2 cm high and the flat lake's normals carry it)
-  bool inWake(vec2 p) {
+  // (m: that stretch drawn in by m metres all round, see where the lake makes way for it)
+  bool inWakeM(vec2 p, float m) {
     float s = wakeS(p);
-    return uBoat.w > 0.01 && s > -7.0 && s < min(uBoat.z + 2.0, 150.0) && abs(p.x) < 14.0 + 0.09 * max(s, 0.0);
+    return uBoat.w > 0.01 && s > -7.0 + m && s < min(uBoat.z + 2.0, 150.0) - m && abs(p.x) < 14.0 + 0.09 * max(s, 0.0) - m;
   }
+  bool inWake(vec2 p) { return inWakeM(p, 0.0); }
   // how churned the water is: the prop wash down the middle, the froth along the crests and the
   // white water close behind the transom (the same bands the foam is drawn with)
   float wakeChurn(float ax, float s) {
@@ -6484,13 +6486,20 @@ var oi = new ShaderMat_({
       // the mesh itself keeps only that disc)
       // (where the wake runs, and round a fall, the lake is drawn by meshes that really move
       // with the waves; each of the three draws only its own part)
-      bool inDisc = uWaveDisc.w > 0.5 && length(p - uWaveDisc.xy) < uWaveDisc.z;
+      // (Whatever makes way for a mesh does so a hand's width inside that mesh's edge, so the
+      // two overlap there instead of meeting on a line. Meeting exactly, each pixel along the
+      // join was decided twice, by two meshes that do not round the same way, and wherever
+      // both said "not mine" nothing was drawn: a hairline across the lake at the boat's bow,
+      // where the wake mesh begins. In the overlap both are the same flat water.)
+      float dDisc = length(p - uWaveDisc.xy);
+      bool inDisc = uWaveDisc.w > 0.5 && dDisc < uWaveDisc.z;
+      bool cutDisc = uWaveDisc.w > 0.5 && dDisc < uWaveDisc.z - 0.08;
       #if defined(WAVE_MESH)
       if (!inDisc) discard;
       #elif defined(WAKE_MESH)
-      if (inDisc || !inWake(p)) discard;
+      if (cutDisc || !inWake(p)) discard;
       #else
-      if (inDisc || (uWakeMeshOn > 0.5 && inWake(p))) discard;
+      if (cutDisc || (uWakeMeshOn > 0.5 && inWakeM(p, 0.08))) discard;
       #endif
       vec3 rw = ringWaves(p);
 
