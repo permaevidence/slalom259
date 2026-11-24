@@ -14,8 +14,10 @@ be changed under "Ski setup"; to watch a set ski itself, switch on the autopilot
 in Settings.
 
 Physics notes: 240 Hz fixed step, force-based edge (the water pushes the skier,
-capped by grip), a rope that only pulls and sags when it is slack, falls only on
-washout or a slack line that snaps taut while the body is out of position.
+capped by grip), a rope that only pulls and sags when it is slack. Falls: a washout,
+leaning in further than the speed can hold (to the inside, or pulled over the front
+if the skier hangs on as the boat takes up the line), a slack line that snaps taut,
+and a ski that meets a buoy square in its middle.
 
 Derived from the prototype at https://the-waterski-game.lovable.app, rebuilt for
 regulation dimensions, buoy judging and a force-based skier model.
