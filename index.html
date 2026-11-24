@@ -10434,12 +10434,15 @@ var GEAR = (() => {
   return G;
 })();
 
-// ---- view: first person (default) or the chase camera -------------------------------------------
-// First person by default; the chase camera is step 4 of the home screen, and V switches views.
-var VIEW = { mode: "fp", eye: new V3_(), ready: !1, headParts: [], test: !1, neck: 0.25, neckLay: 0.5, near: 0.04, hipBend: 0.3 }; // hipBend: share of a turn's lean the upper body does not take
+// ---- view: the chase camera (default) or first person -------------------------------------------
+// From behind the skier by default: the whole skier, the buoys and the line to them are in the
+// picture, which is the easier way in. First person is a choice on the home screen (and V
+// switches views); whoever has chosen it keeps it.
+var VIEW = { mode: "chase", eye: new V3_(), ready: !1, headParts: [], test: !1, neck: 0.25, neckLay: 0.5, near: 0.04, hipBend: 0.3 }; // hipBend: share of a turn's lean the upper body does not take
 try {
-  localStorage.getItem("slalom259.view") === "chase" && ((VIEW.mode = "chase"), (VIEW.test = !0));
+  localStorage.getItem("slalom259.view") === "fp" && (VIEW.mode = "fp");
 } catch {}
+VIEW.test = VIEW.mode === "chase";
 function gfxApplyView() {
   let fp = VIEW.mode === "fp";
   // one body for both views. The head would sit right on the lens, so in first person only the
@@ -10463,8 +10466,8 @@ function gfxViewChips() {
   if (!el) return;
   el.innerHTML = "";
   for (let [label, m] of [
-    ["First person", "fp"],
     ["Chase", "chase"],
+    ["First person", "fp"],
   ]) {
     let c = document.createElement("div");
     ((c.className = "chip" + (VIEW.mode === m ? " on" : "")), (c.textContent = label), (c.onclick = () => ((VIEW.test = m === "chase"), gfxSetView(m))), el.appendChild(c));
